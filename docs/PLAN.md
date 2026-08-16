@@ -1,0 +1,118 @@
+# Plan inicial de implementación
+
+El desarrollo será incremental: cada fase debe dejar una pieza utilizable y verificable antes de incorporar la siguiente. La selección final de variantes de Fooocus y Whisper dependerá de compatibilidad, mantenimiento, licencia y hardware.
+
+## Fase 0 — Descubrimiento del entorno
+
+**Objetivo:** conocer las restricciones reales del equipo y evitar decisiones de CUDA incompatibles.
+
+- Inventariar sistema operativo, Python, GPU, VRAM, RAM, almacenamiento, driver y versiones CUDA soportadas.
+- Confirmar instalación y estado de Ollama.
+- Definir dónde vivirán pesos, cachés, entradas y resultados.
+- Establecer presupuestos de VRAM/RAM y reglas de descarga automática.
+- Documentar amenazas locales: secretos, contenido privado, puertos y permisos de procesos.
+
+**Salida:** matriz de compatibilidad y configuración local documentada.
+
+## Fase 1 — Base del proyecto y contratos
+
+**Objetivo:** fijar límites arquitectónicos antes de implementar integraciones.
+
+- Crear estructura `src`, `tests`, `docs`, `models` y `data`.
+- Definir contratos de runtime, catálogo, ciclo de vida y monitoreo.
+- Definir estados separados para proceso, RAM y dispositivo de cómputo.
+- Incorporar configuración con Pydantic Settings.
+- Configurar calidad, logging y pruebas mínimas.
+
+**Salida:** imports válidos, contratos probados y ninguna descarga de modelos al importar módulos.
+
+## Fase 2 — Búsqueda y sugerencia de herramientas de IA
+
+**Objetivo:** evaluar alternativas antes de comprometer la arquitectura o descargar recursos grandes.
+
+- Mantener un catálogo de candidatos para LLM, imagen, voz, embeddings, RAG y monitoreo.
+- Evaluar cada opción por licencia, actividad, API, compatibilidad Windows/CUDA, VRAM/RAM, tamaño, privacidad y actualización.
+- Comparar variantes de Whisper y el mecanismo de integración de Fooocus.
+- Evaluar herramientas de monitoreo multiplataforma además de NVML.
+- Proponer incorporaciones con beneficios, costos, riesgos y un experimento acotado.
+- Obtener aprobación antes de clonar repositorios, instalar herramientas o descargar pesos.
+
+**Salida:** `docs/tooling-catalog.md` y una decisión registrada por cada herramienta aprobada.
+
+## Fase 3 — Vertical LLM con Ollama
+
+**Objetivo:** entregar la primera suite funcional de extremo a extremo.
+
+- Implementar cliente Ollama, comprobación de salud y catálogo de modelos.
+- Listar, cargar, ejecutar y descargar modelos mediante el contrato común.
+- Implementar chat con streaming, cancelación y manejo de errores.
+- Mantener la UI independiente del SDK de Ollama.
+- Probar con dobles de prueba y una integración optativa contra Ollama local.
+
+**Salida:** tab LLM operativo con un modelo ya instalado; ninguna descarga implícita.
+
+## Fase 4 — Monitor de recursos y políticas de residencia
+
+**Objetivo:** hacer visible y controlable el uso intensivo de recursos.
+
+- Mostrar GPU, VRAM, RAM, CPU y procesos asociados.
+- Implementar refresco fuera del hilo de Tkinter.
+- Añadir acciones explícitas para liberar un modelo y políticas de inactividad configurables.
+- Diferenciar “runtime activo”, “modelo en RAM” y “modelo en GPU”.
+- Degradar correctamente en equipos sin NVIDIA o sin GPU compatible.
+
+**Salida:** panel de recursos y pruebas de transición de estados.
+
+## Fase 5 — Suite Whisper
+
+**Objetivo:** transcribir audio local con selección de modelo y dispositivo.
+
+- Implementar el adaptador elegido en la fase 2.
+- Añadir tab para entrada, idioma, progreso, cancelación y exportación.
+- Gestionar carga/descarga del modelo y archivos temporales.
+- Probar CPU, GPU disponible y falta de memoria.
+
+**Salida:** transcripción local reproducible y exportable.
+
+## Fase 6 — Suite Fooocus
+
+**Objetivo:** controlar generación de imágenes desde una suite dedicada.
+
+- Definir la frontera con Fooocus: API o proceso supervisado.
+- Añadir tab de prompt, parámetros, cola, progreso, cancelación y galería.
+- Aislar outputs y metadatos por ejecución.
+- Gestionar conflictos de VRAM con otras suites.
+
+**Salida:** generación controlada sin bloquear la aplicación.
+
+## Fase 7 — Persistencia PostgreSQL opcional
+
+**Objetivo:** conservar configuraciones, ejecuciones y metadatos cuando se configure una base.
+
+- Diseñar entidades y migraciones; no almacenar binarios grandes en tablas por defecto.
+- Implementar SQLAlchemy 2.x detrás de repositorios/contratos.
+- Validar datos con Pydantic y gestionar credenciales por variables de entorno.
+- Mantener un modo sin base de datos.
+
+**Salida:** historial persistente opcional con migraciones y pruebas.
+
+## Fase 8 — Robustez y distribución
+
+**Objetivo:** preparar una aplicación mantenible para uso diario.
+
+- Añadir logs estructurados, diagnósticos y recuperación ante procesos caídos.
+- Probar concurrencia, cancelación, presión de memoria y cierres limpios.
+- Revisar licencias de código, modelos y redistribución.
+- Evaluar empaquetado para Windows y estrategia de actualizaciones.
+- Crear guía de usuario y solución de problemas.
+
+**Salida:** candidato de distribución reproducible.
+
+## Criterios transversales
+
+- Ninguna operación costosa bloquea el hilo de Tkinter.
+- Ningún backend puede derribar suites no relacionadas.
+- Descargar, cargar y liberar recursos siempre requiere una acción o política visible.
+- Los contratos no exponen tipos de SDKs externos.
+- Los tests con GPU, Ollama, Fooocus, Whisper o PostgreSQL son explícitos y se pueden omitir.
+- No se crea ningún commit sin autorización del usuario.

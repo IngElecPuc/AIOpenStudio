@@ -209,6 +209,19 @@ tempCodeRunnerFile.py
 # PyPI configuration file
 .pypirc
 
+# AIOpenStudio local models, generated content and runtime state
+data/*
+!data/README.md
+models/**/*.bin
+models/**/*.gguf
+models/**/*.safetensors
+models/**/*.ckpt
+models/**/*.pt
+models/**/*.pth
+models/**/blobs/
+outputs/
+cache/
+
 # Marimo
 marimo/_static/
 marimo/_lsp/
