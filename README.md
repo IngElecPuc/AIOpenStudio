@@ -57,23 +57,25 @@ La dirección de dependencias será `ui -> services -> core`. La infraestructura
 
 ## Preparación del entorno
 
-Requiere Python 3.11 o 3.12. En Windows PowerShell:
+Requiere Python 3.12 x64 para el entorno principal. En el equipo inventariado, Python se administra desde `%LOCALAPPDATA%\Python\bin`:
 
 ```powershell
-py -3.12 -m venv .venv
+& "$env:LOCALAPPDATA\Python\bin\python3.12.exe" -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 Tkinter forma parte de la instalación estándar de Python en Windows y no se instala con `pip`.
 
 ### PyTorch y GPU
 
-PyTorch se instala por separado para elegir correctamente CPU o la versión de CUDA compatible con el equipo. Usar el selector oficial de instalación de PyTorch y verificar después:
+El inventario confirmó una RTX 5060 Laptop, compute capability 12.0, driver 573.13 y CUDA Toolkit 12.8. `requirements.txt` selecciona la combinación oficial PyTorch 2.11.0, torchvision 0.26.0 y torchaudio 2.11.0 con wheels CUDA 12.8. Esa variante ya contiene soporte GPU; no existe otro paquete separado llamado `pytorch-gpu`.
+
+Verificar después de instalar:
 
 ```powershell
-python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
+python -c "import torch; print(torch.__version__, torch.version.cuda); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'); print(torch.cuda.get_device_capability(0) if torch.cuda.is_available() else 'N/A')"
 ```
 
 El monitoreo NVIDIA usará NVML cuando esté disponible. La arquitectura no asumirá NVIDIA de forma permanente: el contrato de métricas admite otros proveedores.
@@ -100,6 +102,8 @@ Todavía no existe un entry point funcional: se añadirá con la primera vertica
 ## Plan
 
 El plan incremental, los criterios de aceptación y la etapa específica de búsqueda de herramientas están en [docs/PLAN.md](docs/PLAN.md).
+
+El inventario real de hardware y servicios, la matriz CUDA/PyTorch, las rutas de datos, los presupuestos de memoria y las amenazas locales están en [docs/environment-compatibility.md](docs/environment-compatibility.md).
 
 ## Convención de commits
 

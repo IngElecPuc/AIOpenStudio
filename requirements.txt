@@ -1,15 +1,38 @@
-# Dependencias base. PyTorch se instala por separado para seleccionar CPU/CUDA.
-pydantic>=2.8,<3
+# Python objetivo: CPython 3.12 x64 sobre Windows.
+# La variante +cu128 proporciona PyTorch con soporte GPU NVIDIA; no existe un
+# paquete separado llamado "pytorch-gpu". El índice adicional permite resolver
+# esos wheels sin impedir que el resto de dependencias provenga de PyPI.
+--extra-index-url https://download.pytorch.org/whl/cu128
+
+# Cómputo PyTorch/CUDA 12.8 (versiones coordinadas por el proyecto PyTorch).
+torch==2.11.0+cu128
+torchvision==0.26.0+cu128
+torchaudio==2.11.0+cu128
+
+# Modelos y Hugging Face.
+transformers>=5.14,<6
+huggingface-hub>=1.24,<2
+accelerate>=1.14,<2
+safetensors>=0.8,<1
+sentencepiece>=0.2.2,<1
+numpy>=2,<3
+soundfile>=0.13,<1
+
+# Configuración, validación y persistencia opcional.
+pydantic>=2.9,<3
 pydantic-settings>=2.4,<3
 SQLAlchemy>=2.0,<3
 psycopg[binary]>=3.2,<4
-ollama>=0.3,<1
+platformdirs>=4,<5
+python-dotenv>=1,<2
+
+# Runtimes, red y monitoreo.
+# Este cliente no instala el runtime/servicio Ollama.
+ollama>=0.6.2,<1
 httpx>=0.27,<1
 psutil>=6,<8
 nvidia-ml-py>=12,<14
 Pillow>=10,<13
-platformdirs>=4,<5
-python-dotenv>=1,<2
 
 # Calidad y pruebas durante la etapa inicial.
 pytest>=8,<10

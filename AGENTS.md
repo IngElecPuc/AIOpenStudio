@@ -6,6 +6,7 @@ AIOpenStudio es una aplicación de escritorio local, orientada a objetos, para o
 
 ## Reglas de trabajo
 
+- Leer `docs/environment-compatibility.md` antes de cambiar Python, PyTorch, CUDA, rutas de datos, límites de memoria o configuración de servicios locales.
 - No crear commits, ramas, tags, pushes ni pull requests sin permiso explícito del usuario.
 - Usar exclusivamente estas convenciones de commit:
   - `feat (scope): description`
@@ -52,6 +53,7 @@ Si una comprobación no puede ejecutarse por dependencias o hardware ausente, do
 ## Documentación
 
 - Actualizar `README.md` cuando cambien instalación, ejecución o estructura pública.
+- Mantener `docs/environment-compatibility.md` como fuente compartida del inventario local, decisiones CUDA, rutas, presupuestos y amenazas; no registrar secretos ni identificadores innecesarios del equipo.
 - Registrar decisiones relevantes en `docs/decisions/`.
 - Mantener `docs/PLAN.md` con fases y criterios de salida.
 - Documentar requisitos de hardware y licencias antes de incorporar un modelo o herramienta.

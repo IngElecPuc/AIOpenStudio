@@ -6,6 +6,8 @@ El desarrollo será incremental: cada fase debe dejar una pieza utilizable y ver
 
 **Objetivo:** conocer las restricciones reales del equipo y evitar decisiones de CUDA incompatibles.
 
+**Estado:** inventario inicial completado el 16 de agosto de 2026. La matriz, rutas, presupuestos, amenazas y pendientes están en `docs/environment-compatibility.md`. Ollama, FFmpeg y la validación de PyTorch dentro de `.venv` siguen pendientes.
+
 - Inventariar sistema operativo, Python, GPU, VRAM, RAM, almacenamiento, driver y versiones CUDA soportadas.
 - Confirmar instalación y estado de Ollama.
 - Definir dónde vivirán pesos, cachés, entradas y resultados.
