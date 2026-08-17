@@ -2,7 +2,8 @@
 
 AIOpenStudio será una aplicación de escritorio en Python para descubrir, ejecutar y administrar modelos de inteligencia artificial locales. La interfaz se construirá con Tkinter y tendrá suites independientes para LLM, Fooocus y Whisper. Ollama será el primer backend de la suite de LLM.
 
-> Estado: Fase 3 completada; la vertical LLM con Ollama está implementada y validada de extremo a extremo.
+> Estado: Fase 3 completada; la implementación candidata del monitor de la Fase 4 está lista para
+> validación local.
 
 ## Objetivos
 
@@ -36,6 +37,7 @@ src/aiopenstudio/
 │   └── resource_monitor/
 ├── infrastructure/           # Integraciones externas
 │   ├── database/
+│   ├── monitoring/          # psutil, NVML, Ollama y registro en proceso
 │   └── runtimes/
 │       ├── ollama/
 │       ├── fooocus/
@@ -142,6 +144,11 @@ Iniciar la aplicación:
 El tab LLM consulta modelos ya instalados en Ollama, permite carga y liberación completa, conversa
 por streaming, cancela operaciones y guarda el historial en SQLite. No descarga modelos. Whisper y
 Fooocus aparecen como tabs informativos hasta sus respectivas fases.
+
+El tab Monitor muestra CPU, RAM, GPU/VRAM, procesos, residencia por runtime, cola administrada,
+tokens de la última inferencia y una lista segura de configuración Ollama. La recolección puede
+detenerse y no bloquea el hilo de Tkinter. Sus límites de observabilidad, políticas y batería de
+validación están en [docs/resource-monitoring.md](docs/resource-monitoring.md).
 
 La batería segura, los runs con modelo real, sus ETA y reportes están en
 [docs/ollama-validation.md](docs/ollama-validation.md). Las limitaciones de residencia y proceso de

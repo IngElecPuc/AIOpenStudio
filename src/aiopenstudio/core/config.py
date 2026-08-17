@@ -1,9 +1,9 @@
 """Environment-backed application configuration."""
 
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import AnyHttpUrl, Field, SecretStr
+from pydantic import AnyHttpUrl, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -41,7 +41,26 @@ class AppSettings(BaseSettings):
     sqlite_path: Path = Path("data/runtime/memory.sqlite3")
     sqlite_enable_vectors: bool = False
     sqlite_busy_timeout_ms: int = Field(default=5_000, gt=0, le=60_000)
+    monitoring_enabled: bool = True
+    monitoring_interval_seconds: float = Field(default=1.0, ge=0.5, le=60)
+    monitoring_history_samples: int = Field(default=120, ge=10, le=3_600)
+    monitoring_diagnostics_enabled: bool = False
+    monitoring_auto_release_enabled: bool = False
+    monitoring_idle_timeout_seconds: float = Field(default=600.0, ge=30)
+    monitoring_max_managed_models: int = Field(default=1, ge=1, le=32)
+    monitoring_ram_soft_limit: float = Field(default=0.85, gt=0, lt=1)
+    monitoring_ram_hard_limit: float = Field(default=0.92, gt=0, le=1)
+    monitoring_vram_soft_limit: float = Field(default=0.80, gt=0, lt=1)
+    monitoring_vram_hard_limit: float = Field(default=0.90, gt=0, le=1)
     database_url: SecretStr | None = None
+
+    @model_validator(mode="after")
+    def validate_monitoring_limits(self) -> Self:
+        if self.monitoring_ram_soft_limit >= self.monitoring_ram_hard_limit:
+            raise ValueError("El límite blando de RAM debe ser menor que el límite duro.")
+        if self.monitoring_vram_soft_limit >= self.monitoring_vram_hard_limit:
+            raise ValueError("El límite blando de VRAM debe ser menor que el límite duro.")
+        return self
 
     @staticmethod
     def resolve_path(path: Path, base_dir: Path | None = None) -> Path:

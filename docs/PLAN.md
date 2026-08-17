@@ -69,11 +69,21 @@ liberación completa y ausencia de descargas implícitas.
 
 **Objetivo:** hacer visible y controlable el uso intensivo de recursos.
 
+**Estado:** completada el 17 de agosto de 2026. El panel, las políticas y las transiciones fueron
+validados con 36 pruebas, Ruff, Mypy, preflight real, revisión visual y dos observaciones de hardware.
+El run final tomó 30 muestras en 30,071 segundos, con intervalo medio de 1,016 segundos, cuatro
+proveedores disponibles y ninguna advertencia. La prueba manual confirmó carga, inferencia y
+liberación de un modelo con recuperación de RAM/VRAM.
+
 - Mostrar GPU, VRAM, RAM, CPU y procesos asociados.
 - Implementar refresco fuera del hilo de Tkinter.
 - Añadir acciones explícitas para liberar un modelo y políticas de inactividad configurables.
 - Diferenciar “runtime activo”, “modelo en RAM” y “modelo en GPU”.
 - Degradar correctamente en equipos sin NVIDIA o sin GPU compatible.
+- Mostrar tokens de la última inferencia y distinguir mediciones físicas, reportadas, derivadas,
+  estimadas y desconocidas.
+- Publicar una frontera de registro para telemetría futura de PyTorch/Hugging Face sin importar esos
+  frameworks desde el núcleo o la UI.
 
 **Salida:** panel de recursos y pruebas de transición de estados.
 
@@ -130,3 +140,52 @@ liberación completa y ausencia de descargas implícitas.
 - Los contratos no exponen tipos de SDKs externos.
 - Los tests con GPU, Ollama, Fooocus, Whisper o PostgreSQL son explícitos y se pueden omitir.
 - No se crea ningún commit sin autorización del usuario.
+
+## Deuda técnica registrada
+
+### Gestión conversacional de la suite LLM
+
+- Incorporar un navegador de conversaciones persistidas con acciones para abrir, continuar,
+  renombrar, archivar y eliminar de forma explícita.
+- Implementar borrado seguro de conversaciones, con confirmación, eliminación en cascada de
+  mensajes, resúmenes e índices de búsqueda, y una opción clara para cancelar la acción.
+- Permitir editar el título. Actualmente se crea como `Nueva conversación` y se reemplaza
+  automáticamente por los primeros 60 caracteres de la primera pregunta.
+- Exponer en la UI los parámetros que ya admite el contrato: temperatura, `top_p`, `top_k`, semilla,
+  longitud de contexto, máximo de tokens nuevos y secuencias de parada.
+- Mostrar claramente qué conversación está activa y advertir cuando se cambia de modelo dentro de
+  ella, porque el nuevo modelo recibe el mismo historial.
+- Implementar presupuestos de contexto, conteo de tokens, truncamiento controlado y compresión con
+  resúmenes antes de alcanzar la ventana máxima del modelo.
+- Definir una política visible para respuestas parciales canceladas: conservarlas en el contexto,
+  excluirlas del siguiente turno o permitir que el usuario decida.
+- Añadir pruebas de reapertura y continuidad entre reinicios, cambio de modelo, historiales extensos
+  y concurrencia entre lectura externa y escritura desde AIOpenStudio.
+
+### Configuración y presentación de la interfaz
+
+- Añadir un menú desplegable superior que permita acceder a parámetros y controles de cada suite y
+  del modelo activo sin acoplar la UI a un runtime específico.
+- Separar ajustes comunes de generación, ajustes propios del backend y configuración general de la
+  suite, mostrando sólo controles compatibles con sus capacidades declaradas.
+- Incorporar interpretación y renderizado seguro de Markdown en las respuestas: encabezados,
+  énfasis, listas, citas, enlaces y bloques de código, conservando una alternativa de texto plano.
+- Definir reglas para enlaces, contenido potencialmente peligroso, copiado de código, selección de
+  texto y rendimiento con respuestas extensas o recibidas por streaming.
+
+### Eficiencia del contexto LLM
+
+- Evaluar e implementar prompt caching o reutilización de prefijos y caché KV en los runtimes que
+  lo soporten, sin asumir que todos los backends exponen las mismas capacidades.
+- Definir claves, invalidación, aislamiento entre conversaciones, límites de memoria y tratamiento
+  de contenido privado para evitar reutilizar contexto incorrecto o filtrarlo entre sesiones.
+- Incorporar métricas de aciertos de caché, tokens reutilizados, latencia al primer token, memoria
+  consumida y ahorro efectivo antes de habilitar políticas automáticas.
+- Implementar compactación conversacional basada en presupuestos de tokens, con resúmenes
+  versionados y trazabilidad hacia los mensajes originales; el historial íntegro debe conservarse.
+- Establecer qué información nunca puede perderse al compactar: instrucciones del sistema,
+  decisiones confirmadas, restricciones, herramientas utilizadas y hechos pendientes de validar.
+- Permitir regenerar, inspeccionar y descartar una compactación, además de elegir entre historial
+  completo, resumen más mensajes recientes o una conversación nueva.
+- Añadir evaluaciones de fidelidad y regresión para comprobar que caching y compactación mejoran
+  coste y velocidad sin degradar respuestas, continuidad, privacidad ni comportamiento del modelo.

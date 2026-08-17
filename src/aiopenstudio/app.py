@@ -8,8 +8,14 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 
 from aiopenstudio.core.config import AppSettings
 from aiopenstudio.infrastructure.database import SQLiteStore
+from aiopenstudio.infrastructure.monitoring import (
+    InProcessTelemetryRegistry,
+    NvidiaTelemetryProvider,
+    OllamaTelemetryProvider,
+    SystemTelemetryProvider,
+)
 from aiopenstudio.infrastructure.runtimes.ollama import OllamaRuntime
-from aiopenstudio.services import LLMService
+from aiopenstudio.services import LLMService, ResourceMonitorService
 from aiopenstudio.services.logging import LoggingConfigurator
 from aiopenstudio.ui.app_window import ApplicationWindow
 from aiopenstudio.ui.async_runner import AsyncLoopRunner
@@ -29,14 +35,45 @@ def main() -> None:
     )
     store.initialize()
     runtime = OllamaRuntime(str(settings.ollama_base_url))
-    llm_service = LLMService(runtime=runtime, catalog=store, memory=store)
+    monitor_service = ResourceMonitorService(
+        providers=(
+            SystemTelemetryProvider(),
+            NvidiaTelemetryProvider(),
+            OllamaTelemetryProvider(str(settings.ollama_base_url)),
+            InProcessTelemetryRegistry(),
+        ),
+        runtimes={runtime.name: runtime},
+        enabled=settings.monitoring_enabled,
+        interval_seconds=settings.monitoring_interval_seconds,
+        history_samples=settings.monitoring_history_samples,
+        auto_release_enabled=settings.monitoring_auto_release_enabled,
+        idle_timeout_seconds=settings.monitoring_idle_timeout_seconds,
+        max_managed_models=settings.monitoring_max_managed_models,
+        ram_soft_limit=settings.monitoring_ram_soft_limit,
+        ram_hard_limit=settings.monitoring_ram_hard_limit,
+        vram_soft_limit=settings.monitoring_vram_soft_limit,
+        vram_hard_limit=settings.monitoring_vram_hard_limit,
+    )
+    llm_service = LLMService(
+        runtime=runtime,
+        catalog=store,
+        memory=store,
+        metrics_sink=monitor_service,
+        residency_policy=monitor_service,
+    )
     runner = AsyncLoopRunner()
     runner.start()
 
     root = tk.Tk()
-    ApplicationWindow(root, llm_service, runner)
+    ApplicationWindow(root, llm_service, monitor_service, runner)
 
     def close_application() -> None:
+        try:
+            runner.submit(monitor_service.close()).result(timeout=3)
+        except FutureTimeoutError:
+            logger.warning("Timeout while closing resource telemetry providers")
+        except Exception:
+            logger.exception("Failed to close resource telemetry providers cleanly")
         try:
             runner.submit(runtime.close()).result(timeout=3)
         except FutureTimeoutError:

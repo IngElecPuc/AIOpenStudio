@@ -14,7 +14,9 @@ from aiopenstudio.core.contracts import (
     Conversation,
     ConversationMemory,
     ConversationMessage,
+    InferenceMetricsSink,
     InferenceRequest,
+    InferenceTelemetry,
     LoadPolicy,
     MessageRole,
     ModelCatalog,
@@ -22,6 +24,7 @@ from aiopenstudio.core.contracts import (
     ModelId,
     ModelRuntime,
     ModelState,
+    ResidencyPolicy,
     RuntimeEvent,
     RuntimeEventKind,
     RuntimeHealth,
@@ -38,10 +41,14 @@ class LLMService:
         runtime: ModelRuntime,
         catalog: ModelCatalog,
         memory: ConversationMemory,
+        metrics_sink: InferenceMetricsSink | None = None,
+        residency_policy: ResidencyPolicy | None = None,
     ) -> None:
         self._runtime = runtime
         self._catalog = catalog
         self._memory = memory
+        self._metrics_sink = metrics_sink
+        self._residency_policy = residency_policy
 
     async def health(self) -> RuntimeHealth:
         return await self._runtime.health()
@@ -57,10 +64,28 @@ class LLMService:
         return live_models
 
     async def load_model(self, model: ModelId, policy: LoadPolicy) -> ModelState:
-        return await self._runtime.load(model, policy)
+        descriptor = self._catalog.get(model)
+        if self._residency_policy is not None:
+            await self._residency_policy.before_load(
+                model,
+                policy,
+                descriptor.size_bytes if descriptor else None,
+            )
+        try:
+            state = await self._runtime.load(model, policy)
+        except Exception:
+            if self._residency_policy is not None:
+                self._residency_policy.model_load_failed(model)
+            raise
+        if self._residency_policy is not None:
+            self._residency_policy.model_loaded(state, policy)
+        return state
 
     async def unload_model(self, model: ModelId) -> ModelState:
-        return await self._runtime.unload(model, UnloadTarget.ALL)
+        state = await self._runtime.unload(model, UnloadTarget.ALL)
+        if self._residency_policy is not None:
+            self._residency_policy.model_unloaded(model)
+        return state
 
     async def model_state(self, model: ModelId) -> ModelState:
         return await self._runtime.state(model)
@@ -127,18 +152,37 @@ class LLMService:
             model=model,
             inputs=chat_input.model_dump(mode="json"),
         )
+        implicit_policy = await self._prepare_inference_residency(model, keep_alive_seconds)
 
         response_parts: list[str] = []
         metrics: dict[str, object] = {}
         cancelled = False
         completed = False
-        async for event in self._runtime.run(request):
+        async for event in self._run_with_residency(request, implicit_policy):
             if event.kind is RuntimeEventKind.TEXT_DELTA:
                 text = event.payload.get("text")
                 if isinstance(text, str):
                     response_parts.append(text)
             elif event.kind is RuntimeEventKind.METRICS:
                 metrics.update(event.payload)
+                if self._metrics_sink is not None:
+                    self._metrics_sink.record_inference(
+                        InferenceTelemetry(
+                            operation_id=operation_id,
+                            model=model,
+                            input_tokens=_optional_int(event.payload.get("prompt_eval_count")),
+                            output_tokens=_optional_int(event.payload.get("eval_count")),
+                            total_duration_ns=_optional_int(event.payload.get("total_duration")),
+                            load_duration_ns=_optional_int(event.payload.get("load_duration")),
+                            prompt_duration_ns=_optional_int(
+                                event.payload.get("prompt_eval_duration")
+                            ),
+                            generation_duration_ns=_optional_int(
+                                event.payload.get("eval_duration")
+                            ),
+                            done_reason=_optional_str(event.payload.get("done_reason")),
+                        )
+                    )
             elif event.kind is RuntimeEventKind.CANCELLED:
                 cancelled = True
             elif event.kind is RuntimeEventKind.COMPLETED:
@@ -165,3 +209,54 @@ class LLMService:
 
     async def cancel(self, operation_id: str) -> None:
         await self._runtime.cancel(operation_id)
+
+    async def _prepare_inference_residency(
+        self,
+        model: ModelId,
+        keep_alive_seconds: float | None,
+    ) -> LoadPolicy | None:
+        if self._residency_policy is None:
+            return None
+        current = await self._runtime.state(model)
+        if current.loaded_in_ram or current.loaded_in_gpu:
+            self._residency_policy.model_used(model)
+            return None
+        idle_timeout = keep_alive_seconds
+        if idle_timeout is not None and idle_timeout <= 0:
+            idle_timeout = 0.001
+        policy = LoadPolicy(idle_timeout_seconds=idle_timeout)
+        descriptor = self._catalog.get(model)
+        await self._residency_policy.before_load(
+            model,
+            policy,
+            descriptor.size_bytes if descriptor else None,
+        )
+        return policy
+
+    async def _run_with_residency(
+        self,
+        request: InferenceRequest,
+        implicit_policy: LoadPolicy | None,
+    ) -> AsyncIterator[RuntimeEvent]:
+        try:
+            async for event in self._runtime.run(request):
+                yield event
+        finally:
+            if implicit_policy is not None and self._residency_policy is not None:
+                try:
+                    state = await self._runtime.state(request.model)
+                except Exception:
+                    self._residency_policy.model_load_failed(request.model)
+                else:
+                    if state.loaded_in_ram or state.loaded_in_gpu:
+                        self._residency_policy.model_loaded(state, implicit_policy)
+                    else:
+                        self._residency_policy.model_load_failed(request.model)
+
+
+def _optional_int(value: object) -> int | None:
+    return int(value) if isinstance(value, (int, float)) else None
+
+
+def _optional_str(value: object) -> str | None:
+    return value if isinstance(value, str) else None

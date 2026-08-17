@@ -23,3 +23,7 @@ class RuntimeRequestError(AIOpenStudioError):
 
 class OperationCancelledError(AIOpenStudioError):
     """Raised when an operation is cancelled before it starts streaming."""
+
+
+class ResourceLimitError(AIOpenStudioError):
+    """Raised when a configured RAM, VRAM or residency policy rejects an operation."""
