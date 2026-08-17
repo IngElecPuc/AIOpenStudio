@@ -52,6 +52,11 @@ continúan pendientes de autorización.
 
 **Objetivo:** entregar la primera suite funcional de extremo a extremo.
 
+**Estado:** completada el 17 de agosto de 2026. El adaptador Ollama, catálogo reconciliado, ciclo de
+vida, streaming, cancelación, memoria SQLite y tab LLM fueron verificados con pruebas unitarias, un
+smoke test real, cancelación real y revisión visual. Los reportes confirmaron carga en GPU,
+liberación completa y ausencia de descargas implícitas.
+
 - Implementar cliente Ollama, comprobación de salud y catálogo de modelos.
 - Listar, cargar, ejecutar y descargar modelos mediante el contrato común.
 - Implementar chat con streaming, cancelación y manejo de errores.

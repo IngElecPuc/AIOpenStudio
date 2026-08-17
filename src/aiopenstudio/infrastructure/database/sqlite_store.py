@@ -264,6 +264,40 @@ class SQLiteStore:
                 message.content,
             )
 
+    def get_conversation(self, conversation_id: str) -> Conversation | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM conversations WHERE id = ?",
+                (conversation_id,),
+            ).fetchone()
+        return self._conversation_from_row(row) if row is not None else None
+
+    def list_conversations(self, limit: int = 100) -> Sequence[Conversation]:
+        if not 1 <= limit <= 500:
+            raise ValueError("Conversation limit must be between 1 and 500")
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM conversations
+                ORDER BY updated_at DESC, id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [self._conversation_from_row(row) for row in rows]
+
+    def list_messages(self, conversation_id: str) -> Sequence[ConversationMessage]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM conversation_messages
+                WHERE conversation_id = ?
+                ORDER BY created_at, id
+                """,
+                (conversation_id,),
+            ).fetchall()
+        return [self._message_from_row(row) for row in rows]
+
     def save_summary(self, summary: ConversationSummary) -> None:
         with self._connection() as connection:
             connection.execute(
@@ -397,5 +431,25 @@ class SQLiteStore:
             size_bytes=row["size_bytes"],
             checksum_sha256=row["checksum_sha256"],
             installed=bool(row["installed"]),
+            metadata=json.loads(row["metadata_json"]),
+        )
+
+    @staticmethod
+    def _conversation_from_row(row: sqlite3.Row) -> Conversation:
+        return Conversation(
+            id=row["id"],
+            title=row["title"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _message_from_row(row: sqlite3.Row) -> ConversationMessage:
+        return ConversationMessage(
+            id=row["id"],
+            conversation_id=row["conversation_id"],
+            role=row["role"],
+            content=row["content"],
+            created_at=row["created_at"],
             metadata=json.loads(row["metadata_json"]),
         )

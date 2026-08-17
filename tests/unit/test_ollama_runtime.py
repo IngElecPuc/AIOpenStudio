@@ -1,0 +1,207 @@
+import asyncio
+from collections.abc import AsyncIterator, Mapping, Sequence
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+import pytest
+
+from aiopenstudio.core.contracts import (
+    ChatInput,
+    ChatMessage,
+    ComputeDevice,
+    InferenceRequest,
+    LoadPolicy,
+    MessageRole,
+    ModelId,
+    RuntimeEventKind,
+    UnloadTarget,
+)
+from aiopenstudio.core.errors import (
+    ModelNotInstalledError,
+    RuntimeUnavailableError,
+    UnsupportedRuntimeOperationError,
+)
+from aiopenstudio.infrastructure.runtimes.ollama import OllamaRuntime
+
+
+class FakeOllamaClient:
+    def __init__(self) -> None:
+        self.models: list[dict[str, Any]] = [
+            {
+                "model": "phi4-mini:latest",
+                "size": 2_400_000_000,
+                "digest": "sha256:test",
+                "modified_at": datetime(2026, 8, 17, tzinfo=UTC),
+                "details": {
+                    "family": "phi3",
+                    "parameter_size": "3.8B",
+                    "quantization_level": "Q4_K_M",
+                },
+            }
+        ]
+        self.running: list[dict[str, Any]] = []
+        self.generate_calls: list[dict[str, Any]] = []
+        self.chat_started = asyncio.Event()
+        self.block_chat = False
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
+
+    async def list(self) -> Any:
+        return {"models": self.models}
+
+    async def ps(self) -> Any:
+        return {"models": self.running}
+
+    async def generate(self, model: str, prompt: str = "", **kwargs: Any) -> Any:
+        self.generate_calls.append({"model": model, "prompt": prompt, **kwargs})
+        keep_alive = kwargs.get("keep_alive")
+        if keep_alive == 0:
+            self.running = []
+        else:
+            self.running = [
+                {
+                    "model": model,
+                    "size": 2_400_000_000,
+                    "size_vram": 2_000_000_000,
+                    "expires_at": datetime.now(UTC) + timedelta(minutes=10),
+                }
+            ]
+        return {"done": True}
+
+    async def chat(
+        self,
+        model: str,
+        messages: Sequence[Mapping[str, Any]],
+        **kwargs: Any,
+    ) -> Any:
+        async def chunks() -> AsyncIterator[dict[str, Any]]:
+            self.chat_started.set()
+            if self.block_chat:
+                await asyncio.Event().wait()
+            yield {"message": {"content": "Hola "}, "done": False}
+            yield {
+                "message": {"content": "mundo"},
+                "done": True,
+                "eval_count": 2,
+                "eval_duration": 1_000_000,
+            }
+
+        return chunks()
+
+
+class OfflineOllamaClient(FakeOllamaClient):
+    async def list(self) -> Any:
+        raise ConnectionError("offline")
+
+    async def ps(self) -> Any:
+        raise ConnectionError("offline")
+
+
+def _request(operation_id: str = "operation-1") -> InferenceRequest:
+    chat_input = ChatInput(
+        messages=(ChatMessage(role=MessageRole.USER, content="Saluda"),)
+    )
+    return InferenceRequest(
+        operation_id=operation_id,
+        model=ModelId(runtime="ollama", name="phi4-mini:latest"),
+        inputs=chat_input.model_dump(mode="json"),
+    )
+
+
+def test_catalog_and_lifecycle_are_mapped_without_pulling() -> None:
+    async def scenario() -> None:
+        client = FakeOllamaClient()
+        runtime = OllamaRuntime("http://test", client=client)
+        model_id = ModelId(runtime="ollama", name="phi4-mini:latest")
+
+        models = await runtime.list_models()
+        loaded = await runtime.load(model_id, LoadPolicy())
+        unloaded = await runtime.unload(model_id)
+
+        assert models[0].metadata["quantization_level"] == "Q4_K_M"
+        assert loaded.active_device is ComputeDevice.GPU
+        assert loaded.vram_bytes == 2_000_000_000
+        assert loaded.ram_bytes == 400_000_000
+        assert not unloaded.loaded_in_ram
+        assert not unloaded.loaded_in_gpu
+        assert [call["keep_alive"] for call in client.generate_calls] == [600.0, 0]
+
+    asyncio.run(scenario())
+
+
+def test_partial_unload_and_device_selection_are_explicitly_rejected() -> None:
+    async def scenario() -> None:
+        runtime = OllamaRuntime("http://test", client=FakeOllamaClient())
+        model_id = ModelId(runtime="ollama", name="phi4-mini:latest")
+        with pytest.raises(UnsupportedRuntimeOperationError, match="automáticamente"):
+            await runtime.load(model_id, LoadPolicy(device=ComputeDevice.GPU))
+        with pytest.raises(UnsupportedRuntimeOperationError, match="modelo completo"):
+            await runtime.unload(model_id, UnloadTarget.DEVICE)
+
+    asyncio.run(scenario())
+
+
+def test_streaming_emits_text_metrics_and_completion() -> None:
+    async def scenario() -> None:
+        runtime = OllamaRuntime("http://test", client=FakeOllamaClient())
+        events = [event async for event in runtime.run(_request())]
+
+        assert [event.kind for event in events] == [
+            RuntimeEventKind.STARTED,
+            RuntimeEventKind.TEXT_DELTA,
+            RuntimeEventKind.TEXT_DELTA,
+            RuntimeEventKind.METRICS,
+            RuntimeEventKind.COMPLETED,
+        ]
+        assert "".join(
+            str(event.payload["text"])
+            for event in events
+            if event.kind is RuntimeEventKind.TEXT_DELTA
+        ) == "Hola mundo"
+
+    asyncio.run(scenario())
+
+
+def test_cancel_stops_an_active_stream() -> None:
+    async def scenario() -> None:
+        client = FakeOllamaClient()
+        client.block_chat = True
+        runtime = OllamaRuntime("http://test", client=client)
+        events = []
+
+        async def consume() -> None:
+            events.extend([event async for event in runtime.run(_request("cancel-me"))])
+
+        task = asyncio.create_task(consume())
+        await client.chat_started.wait()
+        await runtime.cancel("cancel-me")
+        await task
+
+        assert events[-1].kind is RuntimeEventKind.CANCELLED
+
+    asyncio.run(scenario())
+
+
+def test_missing_model_is_rejected_before_inference() -> None:
+    async def scenario() -> None:
+        client = FakeOllamaClient()
+        client.models = []
+        runtime = OllamaRuntime("http://test", client=client)
+
+        with pytest.raises(ModelNotInstalledError, match="no se descargará"):
+            _ = [event async for event in runtime.run(_request())]
+
+    asyncio.run(scenario())
+
+
+def test_offline_server_has_safe_health_and_catalog_error() -> None:
+    async def scenario() -> None:
+        runtime = OllamaRuntime("http://test", client=OfflineOllamaClient())
+
+        assert (await runtime.health()).value == "unavailable"
+        with pytest.raises(RuntimeUnavailableError, match="conectar"):
+            await runtime.list_models()
+
+    asyncio.run(scenario())

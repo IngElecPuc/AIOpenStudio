@@ -19,7 +19,9 @@ def test_imports_do_not_create_local_artifacts(tmp_path: Path) -> None:
                 "(_ for _ in ()).throw(AssertionError('network access during import')); "
                 "import aiopenstudio.core.config; "
                 "import aiopenstudio.core.contracts; "
-                "import aiopenstudio.infrastructure.database"
+                "import aiopenstudio.infrastructure.database; "
+                "import aiopenstudio.infrastructure.runtimes.ollama; "
+                "import aiopenstudio.app"
             ),
         ],
         cwd=tmp_path,

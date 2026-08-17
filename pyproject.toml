@@ -23,6 +23,9 @@ dependencies = [
     "python-dotenv>=1,<2",
 ]
 
+[project.scripts]
+aiopenstudio = "aiopenstudio.app:main"
+
 [project.optional-dependencies]
 gpu = [
     "torch==2.11.0+cu128",
@@ -60,6 +63,9 @@ where = ["src"]
 addopts = "-ra --strict-config --strict-markers"
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "ollama_integration: read-only checks against an explicitly enabled local Ollama server",
+]
 
 [tool.ruff]
 target-version = "py311"

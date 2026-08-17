@@ -22,6 +22,16 @@ class UnloadTarget(StrEnum):
     ALL = "all"
 
 
+class RuntimeEventKind(StrEnum):
+    STARTED = "started"
+    TEXT_DELTA = "text_delta"
+    THINKING_DELTA = "thinking_delta"
+    METRICS = "metrics"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    ERROR = "error"
+
+
 class LoadPolicy(BaseModel):
     device: ComputeDevice = ComputeDevice.AUTO
     pin_in_ram: bool = False
@@ -45,7 +55,7 @@ class InferenceRequest(BaseModel):
 
 class RuntimeEvent(BaseModel):
     operation_id: str
-    kind: str
+    kind: RuntimeEventKind
     payload: dict[str, Any] = Field(default_factory=dict)
 
 

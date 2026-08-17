@@ -1,6 +1,7 @@
 """Public contracts shared by services and infrastructure adapters."""
 
 from .catalog import ModelCatalog
+from .chat import ChatInput, ChatMessage, ChatOptions
 from .memory import (
     Conversation,
     ConversationMemory,
@@ -26,10 +27,14 @@ from .runtime import (
     ModelRuntime,
     RuntimeCapabilities,
     RuntimeEvent,
+    RuntimeEventKind,
     UnloadTarget,
 )
 
 __all__ = [
+    "ChatInput",
+    "ChatMessage",
+    "ChatOptions",
     "ComputeDevice",
     "Conversation",
     "ConversationMemory",
@@ -50,6 +55,7 @@ __all__ = [
     "ResourceSnapshot",
     "RuntimeCapabilities",
     "RuntimeEvent",
+    "RuntimeEventKind",
     "RuntimeHealth",
     "UnloadTarget",
 ]
