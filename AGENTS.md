@@ -13,6 +13,9 @@ AIOpenStudio es una aplicación de escritorio local, orientada a objetos, para o
   - `fix (scope): description`
   - `refactor (scope): description`
   - `docs (scope): description`
+- Nombrar archivos y carpetas por su responsabilidad o contenido. No usar marcadores de secuencia como `phase_x`, `fase_x`, `stage_x`, `etapa_x`, `block_x`, `bloque_x`, `step_x` o equivalentes.
+- Las fases y etapas pueden aparecer como estructura interna de `docs/PLAN.md`, pero no deben trasladarse a nombres de artefactos.
+- Evitar fases, etapas o bloques en los mensajes de commit; describir el resultado funcional. Solo usarlos si el usuario lo autoriza explícitamente.
 - Preservar cambios ajenos y revisar `git status` antes y después de editar.
 - Favorecer cambios pequeños, verificables y compatibles con Windows.
 - No descargar pesos, modelos ni repositorios externos sin autorización.

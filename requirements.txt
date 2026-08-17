@@ -17,6 +17,8 @@ safetensors>=0.8,<1
 sentencepiece>=0.2.2,<1
 numpy>=2,<3
 soundfile>=0.13,<1
+# Extensión opcional para futuros índices RAG; se fija porque sigue pre-1.0.
+sqlite-vec==0.1.9
 
 # Configuración, validación y persistencia opcional.
 pydantic>=2.9,<3

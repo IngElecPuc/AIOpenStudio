@@ -20,6 +20,8 @@ El desarrollo será incremental: cada fase debe dejar una pieza utilizable y ver
 
 **Objetivo:** fijar límites arquitectónicos antes de implementar integraciones.
 
+**Estado:** completada. El paquete usa layout `src` con `pyproject.toml`; existen contratos de runtime, catálogo, proceso, residencia RAM/GPU, monitoreo y memoria conversacional. SQLite 3.49.1, FTS5 y `sqlite-vec` 0.1.9 fueron comprobados en Python 3.12. Las pruebas verifican imports sin efectos secundarios.
+
 - Crear estructura `src`, `tests`, `docs`, `models` y `data`.
 - Definir contratos de runtime, catálogo, ciclo de vida y monitoreo.
 - Definir estados separados para proceso, RAM y dispositivo de cómputo.

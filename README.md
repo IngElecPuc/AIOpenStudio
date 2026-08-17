@@ -64,6 +64,7 @@ Requiere Python 3.12 x64 para el entorno principal. En el equipo inventariado, P
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
+python -m pip install --no-deps -e .
 ```
 
 Tkinter forma parte de la instalación estándar de Python en Windows y no se instala con `pip`.
@@ -89,6 +90,14 @@ El monitoreo NVIDIA usará NVML cuando esté disponible. La arquitectura no asum
 
 Copiar `.env.example` a `.env` cuando se necesite configuración local. `.env` nunca se versiona.
 
+### Memoria local y archivos
+
+SQLite guarda referencias de modelos, conversaciones, mensajes y resúmenes. FTS5 proporciona búsqueda textual y `sqlite-vec` queda disponible, pero desactivado hasta elegir el modelo y las dimensiones de embeddings para RAG. La base predeterminada es `data/runtime/memory.sqlite3`.
+
+Los pesos, audios e imágenes no se guardan dentro de SQLite. Sus archivos viven bajo `data/` —ignorado por Git— o en rutas externas configuradas mediante `.env`; la base conserva únicamente rutas y metadatos. Los manifiestos pequeños y versionables permanecen en `models/`.
+
+La decisión y sus consecuencias están en [docs/decisions/local-memory-storage.md](docs/decisions/local-memory-storage.md).
+
 ## Desarrollo
 
 ```powershell
@@ -97,7 +106,7 @@ ruff check .
 mypy src
 ```
 
-Todavía no existe un entry point funcional: se añadirá con la primera vertical completa de la suite LLM.
+Todavía no existe un entry point funcional: se añadirá con la primera vertical completa de la suite LLM. El paquete ya admite instalación editable mediante `pyproject.toml`.
 
 ## Plan
 

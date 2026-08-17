@@ -24,7 +24,9 @@ Ollama no fue encontrado como ejecutable, servicio, proceso, directorio estánda
 | GPU integrada | Intel Iris Xe Graphics | No elegida para PyTorch CUDA | Mantenerla fuera del runtime CUDA inicial |
 | Python 3.12 | CPython 3.12.10, Windows x64 | Recomendado | Crear `.venv` exclusivamente con 3.12 |
 | Python 3.14 | CPython 3.14.6 | No seleccionado | No usar en el entorno del proyecto por ahora |
-| PyTorch | No instalado en un entorno del proyecto | Preparado para instalar | PyTorch 2.11.0, torchvision 0.26.0 y torchaudio 2.11.0 con wheels `cu128` |
+| PyTorch | 2.11.0+cu128 instalado junto con torchvision 0.26.0 y torchaudio 2.11.0 | Compatible y validado: CUDA disponible, RTX 5060 detectada y capability 12.0 | Mantener la integración desacoplada y medir cada modelo antes de admitirlo |
+| SQLite | 3.49.1 incluido con Python 3.12; FTS5 habilitado | Compatible y validado | Base local para referencias, conversaciones y resúmenes |
+| sqlite-vec | 0.1.9, extensión cargable validada | Compatible, opcional y pre-1.0 | Desactivado hasta definir embeddings y dimensiones |
 | Ollama runtime | No detectado; `localhost:11434` sin listener | Bloqueante para la futura vertical Ollama | Instalar y comprobar manualmente antes de Fase 3 |
 | Cliente Python Ollama | Declarado en `requirements.txt` | Compatible | El paquete Python no instala el runtime Ollama |
 | Fooocus | No inventariado/instalado | Pendiente de Fase 2 | Mantener un entorno de runtime aislado para evitar conflictos de PyTorch |
@@ -53,7 +55,8 @@ Todas las rutas de aplicación son configurables. Los valores relativos se resue
 | Logs | `data/logs/` | Ignorados por Git; no registrar prompts ni tokens por defecto |
 | Pesos administrados por AIOpenStudio | `data/models/` | Ignorados por Git; incluir metadatos de licencia y checksum |
 | Pesos Ollama | Directorio administrado por Ollama | No mover hasta instalar y confirmar su configuración |
-| Base de datos | PostgreSQL externo/opcional | Guardar metadatos por defecto, no binarios ni contenido sensible |
+| Base local | `data/runtime/memory.sqlite3` | Referencias, conversaciones, resúmenes e índices; nunca pesos ni multimedia |
+| Base externa | PostgreSQL externo/opcional | Uso futuro para escenarios compartidos; no guardar binarios grandes |
 
 Fooocus deberá ejecutarse con su propio entorno y directorio bajo `data/runtime/fooocus/`. No debe compartir automáticamente el entorno Python principal porque sus restricciones de PyTorch pueden diferir.
 
@@ -116,12 +119,10 @@ Estas comprobaciones no deben descargar un modelo. Una prueba de inferencia se r
 
 ## Pendientes de cierre
 
-1. Crear `.venv` con CPython 3.12 e instalar `requirements.txt` con autorización explícita.
-2. Ejecutar las comprobaciones de PyTorch GPU y registrar consumo en reposo.
-3. Instalar Ollama, confirmar versión, bind local y ubicación real de sus modelos.
-4. Instalar FFmpeg antes de la vertical Whisper.
-5. Revisar la exposición de PostgreSQL 18 antes de configurar credenciales en la aplicación.
-6. Validar los presupuestos con un modelo pequeño, uno mediano y una transcripción de prueba.
+1. Instalar Ollama, confirmar versión, bind local y ubicación real de sus modelos.
+2. Instalar FFmpeg antes de la vertical Whisper.
+3. Revisar la exposición de PostgreSQL 18 antes de configurar credenciales en la aplicación.
+4. Validar los presupuestos con un modelo pequeño, uno mediano y una transcripción de prueba.
 
 ## Fuentes técnicas
 
