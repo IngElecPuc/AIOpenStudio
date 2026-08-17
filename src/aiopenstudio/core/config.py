@@ -27,6 +27,17 @@ class AppSettings(BaseSettings):
     input_dir: Path = Path("data/inputs")
     output_dir: Path = Path("data/outputs")
     log_dir: Path = Path("data/logs")
+    model_library_root: Path = Path("data/models")
+    model_catalog_path: Path = Path("catalog/model-library.sqlite3")
+    ollama_models_dir: Path = Path("ollama")
+    huggingface_home: Path = Path("huggingface")
+    whisper_models_dir: Path = Path("whisper")
+    fooocus_models_dir: Path = Path("fooocus")
+    embedding_models_dir: Path = Path("embeddings")
+    model_manifests_dir: Path = Path("manifests")
+    model_cache_dir: Path = Path("cache")
+    model_temp_dir: Path = Path("temp")
+    model_checklist_path: Path = Path("download-checklist.md")
     sqlite_path: Path = Path("data/runtime/memory.sqlite3")
     sqlite_enable_vectors: bool = False
     sqlite_busy_timeout_ms: int = Field(default=5_000, gt=0, le=60_000)
@@ -39,3 +50,10 @@ class AppSettings(BaseSettings):
         if expanded.is_absolute():
             return expanded.resolve()
         return ((base_dir or Path.cwd()) / expanded).resolve()
+
+    def resolve_model_library_path(self, path: Path) -> Path:
+        """Resolve a portable child path from the shared model library root."""
+        expanded = path.expanduser()
+        if expanded.is_absolute():
+            return expanded.resolve()
+        return (self.model_library_root.expanduser() / expanded).resolve()

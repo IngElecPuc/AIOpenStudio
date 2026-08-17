@@ -51,6 +51,8 @@ La dirección de dependencias será `ui -> services -> core`. La infraestructura
 
 - `docs/`: plan, decisiones técnicas y documentación de desarrollo.
 - `models/`: manifiestos y configuración local por familia; los pesos descargados se ignoran en Git.
+- `schemas/`: esquemas SQLite versionables y portables.
+- `scripts/`: herramientas explícitas de inicialización y descarga.
 - `data/`: datos locales, cachés, entradas y salidas; no debe contener secretos.
 - `src/aiopenstudio/`: código fuente de la aplicación.
 - `tests/`: pruebas unitarias y de integración.
@@ -90,13 +92,38 @@ El monitoreo NVIDIA usará NVML cuando esté disponible. La arquitectura no asum
 
 Copiar `.env.example` a `.env` cuando se necesite configuración local. `.env` nunca se versiona.
 
+### Biblioteca compartida de modelos
+
+Los pesos no se duplican por repositorio. El equipo actual usa
+`C:\Users\fario\Documents\AIModels` como raíz compartida y conserva en SQLite solo metadatos y
+rutas relativas.
+
+Inicializar sin descargar:
+
+```powershell
+python scripts/model_library.py init
+```
+
+Consultar candidatos y descargar uno de forma explícita:
+
+```powershell
+python scripts/model_library.py list
+python scripts/model_library.py download llm.phi4-mini-3.8b-q4
+```
+
+El script no instala Ollama ni dependencias, no descarga al importar y solicita confirmación de
+fuentes/licencias. La estructura, portabilidad y todos los comandos están documentados en
+[docs/shared-model-library.md](docs/shared-model-library.md).
+
 ### Memoria local y archivos
 
 SQLite guarda referencias de modelos, conversaciones, mensajes y resúmenes. FTS5 proporciona búsqueda textual y `sqlite-vec` queda disponible, pero desactivado hasta elegir el modelo y las dimensiones de embeddings para RAG. La base predeterminada es `data/runtime/memory.sqlite3`.
 
 Los pesos, audios e imágenes no se guardan dentro de SQLite. Sus archivos viven bajo `data/` —ignorado por Git— o en rutas externas configuradas mediante `.env`; la base conserva únicamente rutas y metadatos. Los manifiestos pequeños y versionables permanecen en `models/`.
 
-La decisión y sus consecuencias están en [docs/decisions/local-memory-storage.md](docs/decisions/local-memory-storage.md).
+Las decisiones y sus consecuencias están en
+[docs/decisions/local-memory-storage.md](docs/decisions/local-memory-storage.md) y
+[docs/decisions/shared-model-library.md](docs/decisions/shared-model-library.md).
 
 ## Desarrollo
 

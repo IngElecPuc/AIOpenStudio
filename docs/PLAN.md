@@ -34,6 +34,11 @@ El desarrollo será incremental: cada fase debe dejar una pieza utilizable y ver
 
 **Objetivo:** evaluar alternativas antes de comprometer la arquitectura o descargar recursos grandes.
 
+**Estado:** catálogo inicial completado el 17 de agosto de 2026 en
+`docs/tooling-catalog.md`. La biblioteca externa compartida, su esquema, manifiesto y script de
+descarga quedaron preparados sin descargar pesos. Los experimentos y decisiones por herramienta
+continúan pendientes de autorización.
+
 - Mantener un catálogo de candidatos para LLM, imagen, voz, embeddings, RAG y monitoreo.
 - Evaluar cada opción por licencia, actividad, API, compatibilidad Windows/CUDA, VRAM/RAM, tamaño, privacidad y actualización.
 - Comparar variantes de Whisper y el mecanismo de integración de Fooocus.

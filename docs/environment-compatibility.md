@@ -53,8 +53,11 @@ Todas las rutas de aplicación son configurables. Los valores relativos se resue
 | Caché Hugging Face | `data/cache/huggingface/` | Ignorada por Git; configurar mediante `HF_HOME` |
 | Estado temporal | `data/runtime/` | Ignorado por Git; se puede limpiar con la app cerrada |
 | Logs | `data/logs/` | Ignorados por Git; no registrar prompts ni tokens por defecto |
-| Pesos administrados por AIOpenStudio | `data/models/` | Ignorados por Git; incluir metadatos de licencia y checksum |
-| Pesos Ollama | Directorio administrado por Ollama | No mover hasta instalar y confirmar su configuración |
+| Biblioteca compartida | `C:\Users\fario\Documents\AIModels` | Externa al repositorio; raíz configurada por `.env` |
+| Catálogo compartido | `catalog/model-library.sqlite3` bajo la biblioteca | Solo metadatos y rutas relativas; no contiene pesos |
+| Pesos Ollama | `ollama/` bajo la biblioteca | Estructura administrada por Ollama mediante `OLLAMA_MODELS` |
+| Caché Hugging Face | `huggingface/` bajo la biblioteca | Compartida mediante `HF_HOME`; revisiones resueltas antes de registrar |
+| Whisper, Fooocus y embeddings | `whisper/`, `fooocus/` y `embeddings/` | Pesos reutilizables por varios proyectos; licencias por artefacto |
 | Base local | `data/runtime/memory.sqlite3` | Referencias, conversaciones, resúmenes e índices; nunca pesos ni multimedia |
 | Base externa | PostgreSQL externo/opcional | Uso futuro para escenarios compartidos; no guardar binarios grandes |
 
@@ -119,7 +122,8 @@ Estas comprobaciones no deben descargar un modelo. Una prueba de inferencia se r
 
 ## Pendientes de cierre
 
-1. Instalar Ollama, confirmar versión, bind local y ubicación real de sus modelos.
+1. Instalar Ollama, confirmar versión y bind local; la ubicación objetivo ya está fijada en la
+   biblioteca compartida mediante `OLLAMA_MODELS`.
 2. Instalar FFmpeg antes de la vertical Whisper.
 3. Revisar la exposición de PostgreSQL 18 antes de configurar credenciales en la aplicación.
 4. Validar los presupuestos con un modelo pequeño, uno mediano y una transcripción de prueba.
