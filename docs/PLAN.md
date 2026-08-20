@@ -6,7 +6,9 @@ El desarrollo será incremental: cada fase debe dejar una pieza utilizable y ver
 
 **Objetivo:** conocer las restricciones reales del equipo y evitar decisiones de CUDA incompatibles.
 
-**Estado:** inventario inicial completado el 16 de agosto de 2026. La matriz, rutas, presupuestos, amenazas y pendientes están en `docs/environment-compatibility.md`. Ollama, FFmpeg y la validación de PyTorch dentro de `.venv` siguen pendientes.
+**Estado:** inventario inicial completado el 16 de agosto de 2026 y actualizado el 20 de agosto.
+La matriz, rutas, presupuestos, amenazas y pendientes están en `docs/environment-compatibility.md`.
+Ollama y PyTorch están disponibles; FFmpeg externo no es requisito para faster-whisper/PyAV.
 
 - Inventariar sistema operativo, Python, GPU, VRAM, RAM, almacenamiento, driver y versiones CUDA soportadas.
 - Confirmar instalación y estado de Ollama.
@@ -91,6 +93,13 @@ liberación de un modelo con recuperación de RAM/VRAM.
 
 **Objetivo:** transcribir audio local con selección de modelo y dispositivo.
 
+**Estado:** implementación completada el 20 de agosto de 2026. Existen contratos tipados, worker
+aislado de faster-whisper, descubrimiento local sin descargas, progreso, cancelación fuerte,
+exportadores, telemetría, micrófono en Whisper y dictado para LLM con cesión temporal de VRAM. La UI
+distingue selección y residencia y reemplaza el modelo cargado sin liberación manual. Dos runs CPU
+con `small` y la batería de 42 pruebas están aprobados; Ruff y Mypy están limpios. Quedan pendientes
+los runs GPU, cancelación real, micrófono, cambio a `medium` y OOM.
+
 - Implementar el adaptador elegido en la fase 2.
 - Añadir tab para entrada, idioma, progreso, cancelación y exportación.
 - Gestionar carga/descarga del modelo y archivos temporales.
@@ -101,6 +110,14 @@ liberación de un modelo con recuperación de RAM/VRAM.
 ## Fase 6 — Suite Fooocus
 
 **Objetivo:** controlar generación de imágenes desde una suite dedicada.
+
+**Estado:** vertical implementada y validada con GPU el 20 de agosto de 2026. Incluye
+proceso aislado supervisado, transporte Gradio descubierto dinámicamente, contratos neutrales, cola
+FIFO, cancelación cooperativa/fuerte, tab completo, outputs verificados por ejecución, metadatos,
+telemetría y exclusión GPU con suspensión/restauración de LLM y Whisper. La aplicación no instala ni
+descarga Fooocus o checkpoints. El preflight, una generación 1024×1024 y cancelaciones durante carga
+y sampler están aprobados sobre Blackwell/CUDA 12.8. Quedan pendientes concurrencia con LLM y
+Whisper, pasada completa de UI y OOM deliberado.
 
 - Definir la frontera con Fooocus: API o proceso supervisado.
 - Añadir tab de prompt, parámetros, cola, progreso, cancelación y galería.
@@ -142,6 +159,20 @@ liberación de un modelo con recuperación de RAM/VRAM.
 - No se crea ningún commit sin autorización del usuario.
 
 ## Deuda técnica registrada
+
+### Control de razonamiento de los LLM
+
+- Incorporar al catálogo de runtime una capacidad de thinking por modelo y tag que distinga entre
+  no compatible, control booleano (`false/true`) y niveles graduados (`low`, `medium`, `high`,
+  `max`), sin ofrecer valores que el backend reduzca internamente a un simple booleano.
+- Consultar las capacidades reportadas por la versión local de Ollama y mantener el catálogo
+  documentado como fallback; validar cada tag mediante una inferencia acotada, sin descargas
+  implícitas.
+- Extender el contrato común, los servicios y la UI para seleccionar el máximo nivel admitido,
+  transmitir `think` a Ollama y separar el contenido de razonamiento de la respuesta final durante
+  el streaming. No persistir trazas privadas de razonamiento por defecto.
+- Registrar junto a cada ejecución el ajuste solicitado, el aplicado por el runtime, tokens,
+  latencia y consumo de memoria para poder comparar el costo real de cada nivel.
 
 ### Gestión conversacional de la suite LLM
 

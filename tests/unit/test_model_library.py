@@ -57,6 +57,31 @@ def test_versioned_download_manifest_is_valid() -> None:
     assert len({artifact.artifact_id for artifact in manifest.artifacts}) == len(
         manifest.artifacts
     )
+    gemma4 = next(
+        artifact
+        for artifact in manifest.artifacts
+        if artifact.artifact_id == "llm.gemma4-e4b-it-qat"
+    )
+    assert gemma4.runtime_reference == "gemma4:e4b-it-qat"
+    assert gemma4.quantization == "QAT-Q6_K"
+    assert gemma4.expected_size_bytes == 6_100_000_000
+    fooocus_assets = {
+        artifact.artifact_id: artifact
+        for artifact in manifest.artifacts
+        if artifact.family == "fooocus-runtime-asset"
+    }
+    assert set(fooocus_assets) == {
+        "image.fooocus-xl-vae-approx",
+        "image.fooocus-sd15-vae-approx",
+        "image.fooocus-xl-to-v1-interposer",
+        "image.fooocus-prompt-expansion",
+    }
+    assert fooocus_assets["image.fooocus-sd15-vae-approx"].local_path == PurePosixPath(
+        "fooocus/vae_approx/vaeapp_sd15.pth"
+    )
+    assert fooocus_assets["image.fooocus-prompt-expansion"].local_path == PurePosixPath(
+        "fooocus/prompt_expansion/fooocus_expansion/pytorch_model.bin"
+    )
 
 
 def test_shared_catalog_round_trip_and_events(tmp_path: Path) -> None:

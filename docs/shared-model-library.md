@@ -77,6 +77,7 @@ Descargar un artefacto explícito:
 
 ```powershell
 python scripts/model_library.py download llm.phi4-mini-3.8b-q4
+python scripts/model_library.py download llm.gemma4-e4b-it-qat
 ```
 
 Descargar varios:
@@ -86,6 +87,19 @@ python scripts/model_library.py download `
   llm.qwen3-8b-q4 `
   llm.qwen2.5-coder-7b-q4
 ```
+
+Aportar los cuatro activos auxiliares requeridos por Fooocus v2.5.5:
+
+```powershell
+python scripts/model_library.py download `
+  image.fooocus-xl-vae-approx `
+  image.fooocus-sd15-vae-approx `
+  image.fooocus-xl-to-v1-interposer `
+  image.fooocus-prompt-expansion
+```
+
+Este lote no descarga checkpoints. Conserva los nombres locales exactos que espera Fooocus y
+registra el SHA-256 de cada archivo terminado.
 
 Descargar una categoría o todo el manifiesto:
 
@@ -100,6 +114,111 @@ manifiesto y los términos de todos los elementos seleccionados.
 
 El script continúa con el siguiente elemento si uno falla. `--fail-fast` detiene el lote en el
 primer error y `--force` vuelve a validar o descargar elementos ya registrados.
+
+## Flujo operativo recomendado con Ollama
+
+Este es el procedimiento de referencia para descargar un modelo con trazabilidad y comprobarlo
+después en ambos catálogos. Debe ejecutarse desde una terminal nueva para que `PATH` y las
+variables de usuario vigentes estén disponibles.
+
+### 1. Comprobar el entorno
+
+```powershell
+ollama --version
+[Environment]::GetEnvironmentVariable("OLLAMA_MODELS", "User")
+```
+
+La segunda instrucción debe devolver la raíz compartida de Ollama:
+
+```text
+C:\Users\fario\Documents\AIModels\ollama
+```
+
+Antes de iniciar una descarga con el script, cerrar completamente la aplicación de Ollama desde
+la bandeja de Windows. El script actual levanta su propio servidor temporal en
+`127.0.0.1:11435`; evitar dos procesos activos sobre el mismo almacén reduce el riesgo de
+competencia durante la escritura de blobs y manifiestos.
+
+### 2. Consultar el catálogo de candidatos
+
+```powershell
+.\.venv\Scripts\python.exe scripts\model_library.py list --kind llm
+```
+
+El identificador de AIOpenStudio no siempre coincide con el nombre que usa el runtime. Por
+ejemplo, `llm.phi4-mini-3.8b-q4` se descarga en Ollama como
+`phi4-mini:3.8b-q4_K_M`. Ambos valores se conservan en el manifiesto y SQLite.
+
+Para Gemma 4, `llm.gemma4-e4b-it-qat` se resuelve como `gemma4:e4b-it-qat`. Es el artefacto QAT
+oficial de Ollama de aproximadamente 6,1 GB, reportado como Q6_K; no debe describirse como Q4 o Q5.
+E4B significa unos 4,5B parámetros efectivos y aproximadamente 8B totales con embeddings. En la
+GPU local de 8 GB se debe comenzar con contexto de 2K/4K, sin otra carga residente y observando el
+monitor. Incorporarlo al manifiesto no descarga el modelo ni implica que ya esté validado.
+
+### 3. Descargar con trazabilidad
+
+```powershell
+.\.venv\Scripts\python.exe scripts\model_library.py download llm.phi4-mini-3.8b-q4
+```
+
+Revisar el tamaño y la licencia mostrados y escribir `DESCARGAR` para confirmar. Una instalación
+exitosa produce cuatro resultados coordinados:
+
+1. Ollama escribe sus blobs y manifiestos en la carpeta compartida.
+2. La tabla `artifacts` registra el modelo, su referencia de runtime, tamaño y digest.
+3. `download_events` registra el resultado del intento.
+4. El checklist temporal y el bloque administrado del `.env` se actualizan.
+
+No cerrar la terminal mientras la descarga está activa. Si falla, el artefacto no se incorpora a
+`artifacts`; el error sí queda registrado como evento para diagnóstico.
+
+### 4. Verificar el catálogo de AIOpenStudio
+
+```powershell
+.\.venv\Scripts\python.exe scripts\model_library.py status
+```
+
+La salida debe incluir el artefacto instalado. La misma información se refleja en
+`C:\Users\fario\Documents\AIModels\download-checklist.md`; SQLite sigue siendo la fuente de
+verdad.
+
+### 5. Verificar el catálogo de Ollama
+
+Abrir nuevamente Ollama y ejecutar desde una terminal nueva:
+
+```powershell
+ollama list
+(Invoke-RestMethod http://127.0.0.1:11434/api/tags).models |
+    Select-Object name, size, digest
+```
+
+El modelo debería aparecer con su referencia de runtime. Si la aplicación gráfica estaba abierta
+antes de la descarga, cerrar y abrir el selector de modelos o reiniciar Ollama para refrescar la
+vista.
+
+### 6. Ejecutar y liberar el modelo
+
+```powershell
+ollama run phi4-mini:3.8b-q4_K_M "Responde solamente: modelo operativo"
+ollama ps
+ollama stop phi4-mini:3.8b-q4_K_M
+```
+
+`ollama run` valida la generación; `ollama ps` permite observar si el modelo permanece cargado y
+`ollama stop` lo libera de RAM/VRAM sin eliminar sus archivos.
+
+### Direcciones de sincronización
+
+- **Script → Ollama:** sí. El script usa `ollama pull`, por lo que Ollama reconoce los modelos
+  descargados en el almacén compartido.
+- **Script → SQLite:** sí. Solo una descarga verificada genera o actualiza la fila de `artifacts`.
+- **Interfaz de Ollama → SQLite:** todavía no. Una descarga iniciada desde la aplicación gráfica o
+  con un `ollama pull` manual queda disponible para Ollama, pero no se incorpora automáticamente
+  al catálogo de AIOpenStudio.
+
+Hasta implementar una operación de reconciliación, usar el script para toda descarga que deba
+quedar inventariada por AIOpenStudio. No mover, renombrar ni deduplicar manualmente archivos dentro
+de `AIModels\ollama`; esa estructura pertenece a Ollama.
 
 ## Comportamiento por proveedor
 

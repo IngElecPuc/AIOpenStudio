@@ -35,6 +35,13 @@ class AppSettings(BaseSettings):
     whisper_cancel_grace_seconds: float = Field(default=2.0, ge=0.5, le=30)
     whisper_max_input_bytes: int = Field(default=4 * 1024**3, ge=1024**2)
     fooocus_models_dir: Path = Path("fooocus")
+    fooocus_home: Path = Path("data/runtime/fooocus/app")
+    fooocus_python: Path = Path("data/runtime/fooocus/env/Scripts/python.exe")
+    fooocus_host: Literal["127.0.0.1", "localhost", "::1"] = "127.0.0.1"
+    fooocus_port: int = Field(default=7865, ge=1024, le=65_535)
+    fooocus_startup_timeout_seconds: float = Field(default=180.0, ge=10, le=900)
+    fooocus_cancel_grace_seconds: float = Field(default=3.0, ge=0.5, le=30)
+    fooocus_max_image_bytes: int = Field(default=256 * 1024**2, ge=1024**2)
     embedding_models_dir: Path = Path("embeddings")
     model_manifests_dir: Path = Path("manifests")
     model_cache_dir: Path = Path("cache")

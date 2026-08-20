@@ -4,12 +4,14 @@ import tkinter as tk
 from tkinter import ttk
 
 from aiopenstudio.services import (
+    ImageGenerationService,
     LLMDictationService,
     LLMService,
     ResourceMonitorService,
     TranscriptionService,
 )
 from aiopenstudio.ui.async_runner import AsyncLoopRunner
+from aiopenstudio.ui.tabs.fooocus import FooocusTab
 from aiopenstudio.ui.tabs.llm import LLMTab
 from aiopenstudio.ui.tabs.monitor import MonitorTab
 from aiopenstudio.ui.tabs.whisper import WhisperTab
@@ -24,6 +26,7 @@ class ApplicationWindow:
         runner: AsyncLoopRunner,
         transcription_service: TranscriptionService,
         dictation_service: LLMDictationService,
+        image_generation_service: ImageGenerationService,
     ) -> None:
         root.title("AIOpenStudio")
         root.geometry("1050x720")
@@ -37,14 +40,4 @@ class ApplicationWindow:
         )
         notebook.add(MonitorTab(notebook, monitor_service, runner), text="Monitor")
         notebook.add(WhisperTab(notebook, transcription_service, runner), text="Whisper")
-        notebook.add(
-            _placeholder(notebook, "Suite Fooocus", "Se implementará en la fase 6."),
-            text="Fooocus",
-        )
-
-
-def _placeholder(parent: tk.Misc, title: str, detail: str) -> ttk.Frame:
-    frame = ttk.Frame(parent, padding=24)
-    ttk.Label(frame, text=title, font=("TkDefaultFont", 14, "bold")).pack(anchor="w")
-    ttk.Label(frame, text=detail).pack(anchor="w", pady=(8, 0))
-    return frame
+        notebook.add(FooocusTab(notebook, image_generation_service, runner), text="Fooocus")

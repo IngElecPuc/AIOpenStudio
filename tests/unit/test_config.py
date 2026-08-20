@@ -39,3 +39,8 @@ def test_monitoring_soft_limits_must_be_below_hard_limits() -> None:
 
     with pytest.raises(ValidationError, match="límite blando de VRAM"):
         AppSettings(monitoring_vram_soft_limit=0.95, monitoring_vram_hard_limit=0.90)
+
+
+def test_fooocus_network_boundary_is_loopback_only() -> None:
+    with pytest.raises(ValidationError):
+        AppSettings(_env_file=None, fooocus_host="0.0.0.0")

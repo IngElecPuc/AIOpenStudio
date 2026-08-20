@@ -50,6 +50,8 @@ class TranscriptionService:
         self._recorder = recorder
         self._recordings_dir = recordings_dir
         self._max_input_bytes = max_input_bytes
+        self._operation_gate = asyncio.Lock()
+        self._load_policies: dict[str, LoadPolicy] = {}
 
     @property
     def runtime(self) -> TranscriptionRuntime:
@@ -101,6 +103,7 @@ class TranscriptionService:
             raise
         if self._residency_policy is not None:
             self._residency_policy.model_loaded(state, policy)
+        self._load_policies[model.key] = policy
         if self._resource_monitor is not None:
             await self._resource_monitor.snapshot()
         return state
@@ -109,6 +112,7 @@ class TranscriptionService:
         state = await self._runtime.unload(model, UnloadTarget.ALL)
         if self._residency_policy is not None:
             self._residency_policy.model_unloaded(model)
+        self._load_policies.pop(model.key, None)
         if self._resource_monitor is not None:
             await self._resource_monitor.snapshot()
         return state
@@ -123,6 +127,17 @@ class TranscriptionService:
             if state.loaded_in_ram or state.loaded_in_gpu:
                 return state
         return None
+
+    async def reserve_runtime(self) -> None:
+        """Wait for active transcription and prevent a new one from starting."""
+        await self._operation_gate.acquire()
+
+    def release_runtime_reservation(self) -> None:
+        if self._operation_gate.locked():
+            self._operation_gate.release()
+
+    def load_policy(self, model: ModelId) -> LoadPolicy:
+        return self._load_policies.get(model.key, LoadPolicy())
 
     @property
     def microphone_available(self) -> bool:
@@ -162,29 +177,30 @@ class TranscriptionService:
         *,
         load_policy: LoadPolicy | None = None,
     ) -> AsyncIterator[TranscriptionEvent]:
-        self._validate_source(request.source_path)
-        state = await self._runtime.state(request.model)
-        implicit_load = not state.loaded_in_ram and not state.loaded_in_gpu
-        if implicit_load:
-            await self.load_model(request.model, load_policy or LoadPolicy())
-        elif self._residency_policy is not None:
-            self._residency_policy.model_used(request.model)
+        async with self._operation_gate:
+            self._validate_source(request.source_path)
+            state = await self._runtime.state(request.model)
+            implicit_load = not state.loaded_in_ram and not state.loaded_in_gpu
+            if implicit_load:
+                await self.load_model(request.model, load_policy or LoadPolicy())
+            elif self._residency_policy is not None:
+                self._residency_policy.model_used(request.model)
 
-        try:
-            async for event in self._runtime.transcribe(request):
-                if (
-                    event.kind
-                    in {
-                        TranscriptionEventKind.COMPLETED,
-                        TranscriptionEventKind.CANCELLED,
-                    }
-                    and self._residency_policy is not None
-                ):
-                    self._residency_policy.model_used(request.model)
-                yield event
-        finally:
-            if self._resource_monitor is not None:
-                await self._resource_monitor.snapshot()
+            try:
+                async for event in self._runtime.transcribe(request):
+                    if (
+                        event.kind
+                        in {
+                            TranscriptionEventKind.COMPLETED,
+                            TranscriptionEventKind.CANCELLED,
+                        }
+                        and self._residency_policy is not None
+                    ):
+                        self._residency_policy.model_used(request.model)
+                    yield event
+            finally:
+                if self._resource_monitor is not None:
+                    await self._resource_monitor.snapshot()
 
     async def cancel(self, operation_id: str) -> None:
         await self._runtime.cancel(operation_id)

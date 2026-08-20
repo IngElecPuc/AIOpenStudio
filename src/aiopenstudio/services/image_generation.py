@@ -1,0 +1,487 @@
+"""Queued Fooocus generation, run isolation and resource orchestration."""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import shutil
+import time
+import uuid
+from collections.abc import AsyncIterator, Sequence
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from importlib import import_module
+from pathlib import Path
+
+from aiopenstudio.core.contracts import (
+    ComputeDevice,
+    ImageArtifact,
+    ImageGenerationEvent,
+    ImageGenerationEventKind,
+    ImageGenerationRequest,
+    ImageGenerationResult,
+    ImageGenerationRuntime,
+    ImageGenerationStage,
+    ImageProgress,
+    LoadPolicy,
+    ModelCatalog,
+    ModelDescriptor,
+    ResidencyPolicy,
+    ResourceMonitor,
+    RuntimeHealth,
+)
+from aiopenstudio.core.errors import RuntimeRequestError
+from aiopenstudio.services.device_leases import DeviceLease, DeviceLeaseCoordinator
+
+
+@dataclass(slots=True)
+class _QueuedImageJob:
+    request: ImageGenerationRequest
+    events: asyncio.Queue[ImageGenerationEvent | None] = field(default_factory=asyncio.Queue)
+    cancel_requested: bool = False
+
+
+class ImageRunStore:
+    """Persist completed files and sidecar metadata under one operation directory."""
+
+    def __init__(
+        self,
+        output_root: Path,
+        *,
+        allowed_source_roots: Sequence[Path],
+        max_image_bytes: int = 256 * 1024 * 1024,
+    ) -> None:
+        self._output_root = output_root.resolve()
+        self._allowed_source_roots = tuple(path.resolve() for path in allowed_source_roots)
+        self._max_image_bytes = max_image_bytes
+
+    async def begin(self, request: ImageGenerationRequest) -> Path:
+        return await asyncio.to_thread(self._begin_blocking, request)
+
+    async def add_image(
+        self,
+        request: ImageGenerationRequest,
+        source: Path,
+        index: int,
+        seed: int | None,
+    ) -> ImageArtifact:
+        return await asyncio.to_thread(
+            self._add_image_blocking, request, source, index, seed
+        )
+
+    async def record_event(self, event: ImageGenerationEvent) -> None:
+        await asyncio.to_thread(self._record_event_blocking, event)
+
+    async def finish(
+        self,
+        request: ImageGenerationRequest,
+        images: Sequence[ImageArtifact],
+        *,
+        elapsed_seconds: float,
+        status: str,
+        warnings: Sequence[str] = (),
+        error: str | None = None,
+    ) -> ImageGenerationResult:
+        return await asyncio.to_thread(
+            self._finish_blocking,
+            request,
+            tuple(images),
+            elapsed_seconds,
+            status,
+            tuple(warnings),
+            error,
+        )
+
+    def _begin_blocking(self, request: ImageGenerationRequest) -> Path:
+        run = self._run_directory(request.operation_id)
+        (run / "images").mkdir(parents=True, exist_ok=True)
+        return run
+
+    def _add_image_blocking(
+        self,
+        request: ImageGenerationRequest,
+        source: Path,
+        index: int,
+        seed: int | None,
+    ) -> ImageArtifact:
+        source = source.resolve()
+        if not any(source.is_relative_to(root) for root in self._allowed_source_roots):
+            raise RuntimeRequestError("Fooocus devolvió una imagen fuera del staging permitido.")
+        if not source.is_file() or source.stat().st_size > self._max_image_bytes:
+            raise RuntimeRequestError(
+                "La imagen generada no existe o supera el límite configurado."
+            )
+        suffix = source.suffix.casefold()
+        if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+            raise RuntimeRequestError("Fooocus devolvió un formato de imagen no permitido.")
+        image_module = import_module("PIL.Image")
+        with image_module.open(source) as image:
+            image.verify()
+        with image_module.open(source) as image:
+            width, height = image.size
+        destination = self._run_directory(request.operation_id) / "images" / f"{index:04d}{suffix}"
+        temporary = destination.with_name(destination.name + ".partial")
+        shutil.copy2(source, temporary)
+        temporary.replace(destination)
+        digest = hashlib.sha256(destination.read_bytes()).hexdigest()
+        return ImageArtifact(
+            path=destination,
+            metadata_path=self._run_directory(request.operation_id) / "metadata.json",
+            seed=seed,
+            width=width,
+            height=height,
+            sha256=digest,
+        )
+
+    def _record_event_blocking(self, event: ImageGenerationEvent) -> None:
+        run = self._run_directory(event.operation_id)
+        run.mkdir(parents=True, exist_ok=True)
+        payload = event.model_dump(mode="json", exclude={"result"})
+        payload["captured_at"] = datetime.now(UTC).isoformat()
+        with (run / "events.jsonl").open("a", encoding="utf-8") as output:
+            output.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+    def _finish_blocking(
+        self,
+        request: ImageGenerationRequest,
+        images: tuple[ImageArtifact, ...],
+        elapsed_seconds: float,
+        status: str,
+        warnings: tuple[str, ...],
+        error: str | None,
+    ) -> ImageGenerationResult:
+        run = self._run_directory(request.operation_id)
+        metadata = {
+            "schema_version": 1,
+            "operation_id": request.operation_id,
+            "status": status,
+            "request": request.model_dump(mode="json"),
+            "elapsed_seconds": elapsed_seconds,
+            "images": [image.model_dump(mode="json") for image in images],
+            "warnings": list(warnings),
+            "error": error,
+            "finished_at": datetime.now(UTC).isoformat(),
+        }
+        destination = run / "metadata.json"
+        temporary = destination.with_name(destination.name + ".partial")
+        temporary.write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        temporary.replace(destination)
+        return ImageGenerationResult(
+            operation_id=request.operation_id,
+            model=request.model,
+            run_directory=run,
+            elapsed_seconds=elapsed_seconds,
+            images=images,
+            cancelled=status == "cancelled",
+            warnings=warnings,
+        )
+
+    def _run_directory(self, operation_id: str) -> Path:
+        safe_characters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+        if not operation_id or any(character not in safe_characters for character in operation_id):
+            raise RuntimeRequestError("El identificador de ejecución no es seguro para una ruta.")
+        return self._output_root / operation_id
+
+
+class ImageGenerationService:
+    """Own the FIFO queue and expose a streaming use case to Tkinter or a future API."""
+
+    def __init__(
+        self,
+        runtime: ImageGenerationRuntime,
+        catalog: ModelCatalog,
+        run_store: ImageRunStore,
+        device_leases: DeviceLeaseCoordinator,
+        *,
+        residency_policy: ResidencyPolicy | None = None,
+        resource_monitor: ResourceMonitor | None = None,
+    ) -> None:
+        self._runtime = runtime
+        self._catalog = catalog
+        self._run_store = run_store
+        self._device_leases = device_leases
+        self._residency_policy = residency_policy
+        self._resource_monitor = resource_monitor
+        self._queue: asyncio.Queue[_QueuedImageJob | None] = asyncio.Queue()
+        self._jobs: dict[str, _QueuedImageJob] = {}
+        self._worker: asyncio.Task[None] | None = None
+        self._active_operation: str | None = None
+
+    @property
+    def runtime(self) -> ImageGenerationRuntime:
+        return self._runtime
+
+    @staticmethod
+    def create_operation_id() -> str:
+        return str(uuid.uuid4())
+
+    def preflight(self) -> tuple[str, ...]:
+        return self._runtime.preflight()
+
+    @property
+    def active_operation(self) -> str | None:
+        return self._active_operation
+
+    async def health(self) -> RuntimeHealth:
+        return await self._runtime.health()
+
+    async def refresh_models(self) -> Sequence[ModelDescriptor]:
+        models = tuple(await self._runtime.list_models())
+        live_keys = {descriptor.id.key for descriptor in models}
+        for stale in self._catalog.list(runtime=self._runtime.name):
+            if stale.id.key not in live_keys:
+                self._catalog.remove(stale.id)
+        for descriptor in models:
+            self._catalog.save(descriptor)
+        return models
+
+    async def list_styles(self) -> Sequence[str]:
+        return await self._runtime.list_styles()
+
+    async def stream_generation(
+        self, request: ImageGenerationRequest
+    ) -> AsyncIterator[ImageGenerationEvent]:
+        if request.operation_id in self._jobs:
+            raise RuntimeRequestError("Ya existe una ejecución con ese identificador.")
+        job = _QueuedImageJob(request=request)
+        self._jobs[request.operation_id] = job
+        await self._queue.put(job)
+        if self._worker is None or self._worker.done():
+            self._worker = asyncio.create_task(self._work())
+        await self._emit(
+            job,
+            ImageGenerationEvent(
+                operation_id=request.operation_id,
+                kind=ImageGenerationEventKind.QUEUED,
+                progress=ImageProgress(
+                    stage=ImageGenerationStage.QUEUED,
+                    queue_position=self._queue.qsize() - 1,
+                    detail="Trabajo añadido a la cola local.",
+                ),
+            ),
+            persist=False,
+        )
+        try:
+            while True:
+                event = await job.events.get()
+                if event is None:
+                    return
+                yield event
+        finally:
+            self._jobs.pop(request.operation_id, None)
+
+    async def cancel(self, operation_id: str) -> None:
+        job = self._jobs.get(operation_id)
+        if job is None:
+            return
+        job.cancel_requested = True
+        if self._active_operation == operation_id:
+            await self._runtime.cancel(operation_id)
+
+    async def close(self) -> None:
+        if self._active_operation is not None:
+            await self._runtime.cancel(self._active_operation)
+        await self._queue.put(None)
+        if self._worker is not None:
+            await asyncio.gather(self._worker, return_exceptions=True)
+        await self._runtime.stop()
+
+    async def _work(self) -> None:
+        while True:
+            job = await self._queue.get()
+            if job is None:
+                return
+            try:
+                await self._execute(job)
+            except Exception as error:
+                await self._emit(
+                    job,
+                    ImageGenerationEvent(
+                        operation_id=job.request.operation_id,
+                        kind=ImageGenerationEventKind.ERROR,
+                        progress=ImageProgress(stage=ImageGenerationStage.FAILED),
+                        message=str(error),
+                    ),
+                    persist=False,
+                )
+            finally:
+                await job.events.put(None)
+                self._queue.task_done()
+
+    async def _execute(self, job: _QueuedImageJob) -> None:
+        request = job.request
+        started = time.perf_counter()
+        await self._run_store.begin(request)
+        if job.cancel_requested:
+            result = await self._run_store.finish(
+                request, (), elapsed_seconds=0, status="cancelled"
+            )
+            await self._emit(job, self._terminal_event(result))
+            return
+        self._active_operation = request.operation_id
+        images: list[ImageArtifact] = []
+        warnings: list[str] = []
+        lease = self._device_leases.lease(request.model)
+        entered = False
+        loaded = False
+        cancelled = False
+        try:
+            await self._emit(
+                job,
+                ImageGenerationEvent(
+                    operation_id=request.operation_id,
+                    kind=ImageGenerationEventKind.PROGRESS,
+                    progress=ImageProgress(
+                        stage=ImageGenerationStage.WAITING_FOR_DEVICE,
+                        detail="Esperando exclusividad de GPU y suites activas…",
+                    ),
+                ),
+            )
+            await lease.__aenter__()
+            entered = True
+            descriptor = self._catalog.get(request.model)
+            policy = LoadPolicy(device=ComputeDevice.GPU)
+            if self._residency_policy is not None:
+                await self._residency_policy.before_load(
+                    request.model,
+                    policy,
+                    descriptor.size_bytes if descriptor else None,
+                )
+            try:
+                state = await self._runtime.load(request.model, policy)
+                loaded = True
+            except Exception:
+                if self._residency_policy is not None:
+                    self._residency_policy.model_load_failed(request.model)
+                raise
+            if self._residency_policy is not None:
+                self._residency_policy.model_loaded(state, policy)
+            if self._resource_monitor is not None:
+                await self._resource_monitor.snapshot()
+            if job.cancel_requested:
+                cancelled = True
+            else:
+                await self._emit(
+                    job,
+                    ImageGenerationEvent(
+                        operation_id=request.operation_id,
+                        kind=ImageGenerationEventKind.STARTED,
+                        progress=ImageProgress(stage=ImageGenerationStage.STARTING_RUNTIME),
+                    ),
+                )
+                async for event in self._runtime.generate(request):
+                    if (
+                        event.kind is ImageGenerationEventKind.IMAGE
+                        and event.source_path is not None
+                    ):
+                        index = len(images) + 1
+                        seed = (
+                            request.options.seed + index - 1
+                            if request.options.seed is not None
+                            else event.seed
+                        )
+                        artifact = await self._run_store.add_image(
+                            request, event.source_path, index, seed
+                        )
+                        images.append(artifact)
+                        event = event.model_copy(
+                            update={"source_path": artifact.path, "seed": seed}
+                        )
+                    elif event.kind is ImageGenerationEventKind.CANCELLED:
+                        cancelled = True
+                        continue
+                    await self._emit(job, event)
+            cancelled = cancelled or job.cancel_requested
+        except Exception as error:
+            await self._runtime.cancel(request.operation_id)
+            if entered:
+                await self._release_runtime(request, loaded, lease, warnings)
+                entered = False
+            elapsed = time.perf_counter() - started
+            await self._run_store.finish(
+                request,
+                images,
+                elapsed_seconds=elapsed,
+                status="failed",
+                warnings=warnings,
+                error=str(error),
+            )
+            await self._emit(
+                job,
+                ImageGenerationEvent(
+                    operation_id=request.operation_id,
+                    kind=ImageGenerationEventKind.ERROR,
+                    progress=ImageProgress(stage=ImageGenerationStage.FAILED),
+                    message=str(error),
+                ),
+            )
+            return
+        finally:
+            self._active_operation = None
+        if entered:
+            await self._release_runtime(request, loaded, lease, warnings)
+        elapsed = time.perf_counter() - started
+        result = await self._run_store.finish(
+            request,
+            images,
+            elapsed_seconds=elapsed,
+            status="cancelled" if cancelled else "completed",
+            warnings=warnings,
+        )
+        await self._emit(job, self._terminal_event(result))
+
+    async def _release_runtime(
+        self,
+        request: ImageGenerationRequest,
+        loaded: bool,
+        lease: DeviceLease,
+        warnings: list[str],
+    ) -> None:
+        if loaded:
+            try:
+                await self._runtime.unload(request.model)
+            except Exception as error:
+                warnings.append(f"No fue posible detener Fooocus: {error}")
+            finally:
+                if self._residency_policy is not None:
+                    self._residency_policy.model_unloaded(request.model)
+        try:
+            await lease.__aexit__(None, None, None)
+        except BaseException as error:
+            warnings.append(f"No fue posible restaurar todas las suites: {error}")
+        if self._resource_monitor is not None:
+            await self._resource_monitor.snapshot()
+
+    async def _emit(
+        self,
+        job: _QueuedImageJob,
+        event: ImageGenerationEvent,
+        *,
+        persist: bool = True,
+    ) -> None:
+        if persist:
+            await self._run_store.record_event(event)
+        await job.events.put(event)
+
+    @staticmethod
+    def _terminal_event(result: ImageGenerationResult) -> ImageGenerationEvent:
+        return ImageGenerationEvent(
+            operation_id=result.operation_id,
+            kind=(
+                ImageGenerationEventKind.CANCELLED
+                if result.cancelled
+                else ImageGenerationEventKind.COMPLETED
+            ),
+            progress=ImageProgress(
+                stage=(
+                    ImageGenerationStage.CANCELLED
+                    if result.cancelled
+                    else ImageGenerationStage.COMPLETED
+                ),
+                fraction=1,
+            ),
+            result=result,
+        )

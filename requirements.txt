@@ -36,6 +36,15 @@ psutil>=6,<8
 nvidia-ml-py>=12,<14
 Pillow>=10,<13
 
+# Suite Whisper local y captura de micrófono.
+faster-whisper==1.2.1
+ctranslate2>=4.5,<5
+av>=14,<17
+sounddevice>=0.5,<1
+
+# Transporte del proceso Fooocus aislado; no instala Fooocus ni sus pesos.
+gradio-client==0.5.0
+
 # Calidad y pruebas durante la etapa inicial.
 pytest>=8,<10
 pytest-cov>=5,<8

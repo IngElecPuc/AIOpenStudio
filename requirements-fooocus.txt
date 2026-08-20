@@ -1,0 +1,25 @@
+# Entorno aislado de Fooocus: CPython 3.10 x64 sobre Windows.
+# Instalar exclusivamente en data/runtime/fooocus/env; nunca en .venv.
+# La fuente esperada es Fooocus v2.5.5, commit
+# 8da1d3ff68942e2d976675939fe72c95746e366e.
+#
+# Los paquetes generales conservan los pins oficiales de esa release. PyTorch y
+# torchvision se fijan aparte a wheels CUDA 12.8 compatibles con la RTX 5060.
+--extra-index-url https://download.pytorch.org/whl/cu128
+
+-r data/runtime/fooocus/app/requirements_versions.txt
+
+torch==2.7.1+cu128
+torchvision==0.22.1+cu128
+
+# Gradio 3.41.2 no acota estas dependencias transitivas. Sus releases actuales
+# cambiaron la firma de TemplateResponse y rompen el arranque de Fooocus 2.5.5.
+# Este conjunto reproduce el stack compatible usado por la distribución.
+fastapi==0.101.0
+starlette==0.27.0
+pydantic==2.1.1
+anyio==3.7.1
+uvicorn==0.23.2
+jinja2==3.1.2
+markupsafe==2.1.3
+python-multipart==0.0.6

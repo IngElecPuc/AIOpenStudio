@@ -21,6 +21,30 @@ AIOpenStudio es una aplicación de escritorio local, orientada a objetos, para o
 - No descargar pesos, modelos ni repositorios externos sin autorización.
 - Nunca versionar secretos, credenciales, bases de datos locales, audios, imágenes generadas, pesos o cachés.
 
+## Gestión del contexto y continuidad
+
+- Tratar el repositorio como fuente de verdad entre chats. Exteriorizar decisiones, restricciones,
+  resultados de validación y deuda técnica en `README.md`, `docs/PLAN.md`, `docs/decisions/` o la
+  documentación específica correspondiente.
+- No depender únicamente de la memoria conversacional ni de un resumen compactado. Antes de actuar,
+  releer los archivos relevantes, `AGENTS.md`, el estado de Git y las salidas persistidas que
+  fundamenten la tarea.
+- Mantener actualizaciones y respuestas concisas, evitando repetir antecedentes que ya estén
+  documentados. Al consultar herramientas, preferir búsquedas dirigidas y resultados acotados en vez
+  de volcar archivos o logs completos sin necesidad.
+- Al cerrar una unidad funcional, registrar criterios de salida, verificaciones ejecutadas,
+  resultados reales y trabajo pendiente antes de pasar a la siguiente.
+- Cuando una conversación cambie de fase, acumule muchos artefactos o requiera volver reiteradamente
+  a antecedentes antiguos, recomendar iniciar un chat nuevo aunque todavía exista capacidad de
+  contexto disponible.
+- Para continuar en otro chat, preparar un traspaso compacto que identifique objetivo actual, último
+  commit relevante, estado sucio del repositorio, archivos fuente de verdad, decisiones vigentes,
+  verificaciones aprobadas, acciones prohibidas y próximo paso concreto.
+- En un chat nuevo, verificar el traspaso contra el repositorio antes de continuar. Un resumen ayuda
+  a orientarse, pero no reemplaza la inspección del código, la documentación y el estado local.
+- No afirmar cifras exactas sobre contexto activo, compactación, consumo o coste sin telemetría.
+  Diferenciar siempre historial bruto, contexto activo estimado y procesamiento acumulado.
+
 ## Arquitectura
 
 - Mantener la dirección de dependencias: `ui -> services -> core`.

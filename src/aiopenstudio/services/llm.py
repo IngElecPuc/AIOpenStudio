@@ -235,6 +235,17 @@ class LLMService:
         event = self._idle_events.setdefault(model.key, asyncio.Event())
         await event.wait()
 
+    async def active_model_state(self) -> ModelState | None:
+        """Return the first Ollama model currently resident in RAM or GPU."""
+        for descriptor in await self._runtime.list_models():
+            state = await self._runtime.state(descriptor.id)
+            if state.loaded_in_ram or state.loaded_in_gpu:
+                return state
+        return None
+
+    def load_policy(self, model: ModelId) -> LoadPolicy:
+        return self._load_policies.get(model.key, LoadPolicy())
+
     async def reserve_model(self, model: ModelId) -> None:
         gate = self._model_gates.setdefault(model.key, asyncio.Lock())
         await gate.acquire()

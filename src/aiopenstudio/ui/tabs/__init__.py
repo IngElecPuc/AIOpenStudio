@@ -3,3 +3,6 @@
 from .llm import LLMTab
 
 __all__ = ["LLMTab"]
+from .fooocus import FooocusTab
+
+__all__ = ["FooocusTab"]

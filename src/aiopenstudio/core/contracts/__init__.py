@@ -2,6 +2,18 @@
 
 from .catalog import ModelCatalog
 from .chat import ChatInput, ChatMessage, ChatOptions
+from .image_generation import (
+    ImageArtifact,
+    ImageGenerationEvent,
+    ImageGenerationEventKind,
+    ImageGenerationOptions,
+    ImageGenerationRequest,
+    ImageGenerationResult,
+    ImageGenerationRuntime,
+    ImageGenerationStage,
+    ImagePerformance,
+    ImageProgress,
+)
 from .memory import (
     Conversation,
     ConversationMemory,
@@ -79,6 +91,16 @@ __all__ = [
     "InferenceMetricsSink",
     "InferenceRequest",
     "InferenceTelemetry",
+    "ImageArtifact",
+    "ImageGenerationEvent",
+    "ImageGenerationEventKind",
+    "ImageGenerationOptions",
+    "ImageGenerationRequest",
+    "ImageGenerationResult",
+    "ImageGenerationRuntime",
+    "ImageGenerationStage",
+    "ImagePerformance",
+    "ImageProgress",
     "LoadPolicy",
     "ModelLifecycleRuntime",
     "MemorySearchHit",

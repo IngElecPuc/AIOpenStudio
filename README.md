@@ -2,8 +2,8 @@
 
 AIOpenStudio será una aplicación de escritorio en Python para descubrir, ejecutar y administrar modelos de inteligencia artificial locales. La interfaz se construirá con Tkinter y tendrá suites independientes para LLM, Fooocus y Whisper. Ollama será el primer backend de la suite de LLM.
 
-> Estado: verticales LLM y Monitor aceptadas; suite Whisper implementada y validada en CPU con
-> `small`. Siguen pendientes sus runs GPU, cancelación, micrófono y presión de memoria.
+> Estado: verticales LLM y Monitor aceptadas; Whisper validada en CPU con `small`; Fooocus validado
+> con generación y cancelación reales en GPU. Ninguna suite descarga pesos desde la UI.
 
 ## Objetivos
 
@@ -71,13 +71,24 @@ python -m pip install -r requirements.txt
 python -m pip install --no-deps -e .
 ```
 
-La suite Whisper y la captura de micrófono son dependencias opcionales:
+Para agregar sólo la suite Whisper y la captura de micrófono a una instalación editable mínima:
 
 ```powershell
 python -m pip install -e ".[whisper]"
 ```
 
 Este comando no descarga pesos. La compatibilidad CUDA se valida por separado antes de usar GPU.
+
+El transporte de la suite Fooocus puede agregarse del mismo modo:
+
+```powershell
+python -m pip install -e ".[fooocus]"
+```
+
+Este comando no instala Fooocus ni descarga checkpoints.
+
+`requirements.txt` incluye ambos grupos para preparar de una vez el entorno principal. Los extras
+son útiles para instalaciones incrementales basadas en `pip install --no-deps -e .`.
 
 Tkinter forma parte de la instalación estándar de Python en Windows y no se instala con `pip`.
 
@@ -93,10 +104,88 @@ python -c "import torch; print(torch.__version__, torch.version.cuda); print(tor
 
 El monitoreo NVIDIA usará NVML cuando esté disponible. La arquitectura no asumirá NVIDIA de forma permanente: el contrato de métricas admite otros proveedores.
 
+### Entorno aislado de Fooocus
+
+Fooocus **no se instala en `.venv`**. La release oficial v2.5.5 fija versiones antiguas de Gradio,
+Transformers y NumPy, además de una combinación PyTorch distinta de la aplicación. Para evitar que
+esas restricciones rompan LLM, Whisper o el monitor, se usa este layout local ignorado por Git:
+
+```text
+data/runtime/fooocus/
+├── app/    # fuente oficial Fooocus v2.5.5
+└── env/    # entorno CPython 3.10 exclusivo
+```
+
+La fuente aprobada queda fijada al tag `v2.5.5` y al commit
+`8da1d3ff68942e2d976675939fe72c95746e366e`. Para comprobar una copia existente:
+
+```powershell
+git -C .\data\runtime\fooocus\app remote get-url origin
+git -C .\data\runtime\fooocus\app describe --tags --exact-match
+git -C .\data\runtime\fooocus\app rev-parse HEAD
+```
+
+Con Python 3.10.11 instalado, crear el entorno sólo si aún no existe:
+
+```powershell
+$fooocusPython = "$env:LOCALAPPDATA\Programs\Python\Python310\python.exe"
+& $fooocusPython --version
+& $fooocusPython -m venv .\data\runtime\fooocus\env
+```
+
+La instalación siguiente descarga paquetes, pero no checkpoints ni activos de modelos. Debe
+ejecutarse desde la raíz del repositorio y únicamente tras revisarla:
+
+```powershell
+& .\data\runtime\fooocus\env\Scripts\python.exe -m pip install --upgrade pip setuptools wheel
+& .\data\runtime\fooocus\env\Scripts\python.exe -m pip install -r .\requirements-fooocus.txt
+```
+
+`requirements-fooocus.txt` reutiliza los pins oficiales de la fuente local y selecciona PyTorch
+2.7.1/torchvision 0.22.1 con CUDA 12.8 como primera combinación para la GPU Blackwell. Es una
+compatibilidad candidata: debe aprobar el preflight y un smoke real antes de considerarse validada.
+No incluye `xformers`, no ejecuta `entry_with_update.py` y no descarga los cuatro activos auxiliares
+ni checkpoints.
+
+Comprobar ambos entornos sin activarlos:
+
+```powershell
+& .\data\runtime\fooocus\env\Scripts\python.exe -c "import torch, torchvision, gradio; print(torch.__version__, torchvision.__version__, gradio.__version__); print(torch.version.cuda, torch.cuda.is_available())"
+& .\.venv\Scripts\python.exe -c "import gradio_client; print(gradio_client.__version__)"
+& .\.venv\Scripts\python.exe scripts\validate_fooocus_vertical.py preflight
+```
+
+La aplicación siempre se inicia con `.venv`; el supervisor invoca el intérprete secundario cuando
+Fooocus lo necesita:
+
+```powershell
+& .\.venv\Scripts\python.exe -m aiopenstudio
+```
+
+No se debe activar el entorno Fooocus para ejecutar AIOpenStudio ni lanzar Fooocus manualmente. Los
+checkpoints y activos auxiliares viven bajo `<MODEL_LIBRARY_ROOT>/fooocus/`, fuera de ambos entornos.
+Los cuatro activos requeridos para el arranque offline se aportan explícitamente con:
+
+```powershell
+& .\.venv\Scripts\python.exe scripts\model_library.py download `
+  image.fooocus-xl-vae-approx `
+  image.fooocus-sd15-vae-approx `
+  image.fooocus-xl-to-v1-interposer `
+  image.fooocus-prompt-expansion
+```
+
+El peso de expansión se complementa con siete archivos pequeños de configuración y tokenizer que
+ya vienen en la fuente oficial. El supervisor los sincroniza localmente desde la fuente fijada antes
+de arrancar; esta operación no accede a Internet.
+
+El inventario pendiente y los runs están en
+[docs/fooocus-validation.md](docs/fooocus-validation.md).
+
 ### Servicios externos
 
 - Ollama debe instalarse y ejecutarse como servicio local; su URL predeterminada será `http://localhost:11434`.
-- Fooocus se integrará mediante un adaptador de proceso/API, sin copiar su código dentro del núcleo.
+- Fooocus usa un proceso aislado supervisado y Gradio como transporte local en loopback; la
+  aplicación no ejecuta su actualizador ni descargas automáticas.
 - Whisper usa faster-whisper/CTranslate2 en un worker local aislado y no descarga modelos desde la UI.
 - PostgreSQL será opcional. La aplicación deberá iniciar sin una base de datos configurada.
 
@@ -157,6 +246,11 @@ El tab Whisper abre audio local o graba desde el micrófono, distingue el modelo
 modelo realmente residente, cambia de modelo sin exigir una liberación manual, muestra progreso y
 segmentos, cancela y exporta TXT, JSON, SRT o VTT. Sus runs seguros y reales están en
 [docs/whisper-validation.md](docs/whisper-validation.md).
+
+El tab Fooocus ofrece parámetros, cola FIFO, cancelación y galería. Cada ejecución copia imágenes
+verificadas y metadatos a un directorio propio. Antes de usar la GPU espera operaciones activas,
+suspende residentes administrados y los restaura al terminar. La configuración y los runs delegados
+están en [docs/fooocus-validation.md](docs/fooocus-validation.md).
 
 El tab Monitor muestra CPU, RAM, GPU/VRAM, procesos, residencia por runtime, cola administrada,
 tokens de la última inferencia y una lista segura de configuración Ollama. La recolección puede

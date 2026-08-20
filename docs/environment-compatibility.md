@@ -26,12 +26,12 @@ antes de usarlo desde la aplicación.
 | GPU integrada | Intel Iris Xe Graphics | No elegida para PyTorch CUDA | Mantenerla fuera del runtime CUDA inicial |
 | Python 3.12 | CPython 3.12.10, Windows x64 | Recomendado | Crear `.venv` exclusivamente con 3.12 |
 | Python 3.14 | CPython 3.14.6 | No seleccionado | No usar en el entorno del proyecto por ahora |
-| PyTorch | 2.11.0+cu128 instalado junto con torchvision 0.26.0 y torchaudio 2.11.0 | Compatible y validado: CUDA disponible, RTX 5060 detectada y capability 12.0 | Mantener la integración desacoplada y medir cada modelo antes de admitirlo |
+| PyTorch principal | Declarado como 2.11.0+cu128 con torchvision 0.26.0 y torchaudio 2.11.0, pero no instalado actualmente en `.venv` | No requerido por Ollama, faster-whisper ni el transporte Fooocus actuales | Instalar el extra GPU sólo al incorporar un backend PyTorch en proceso |
 | SQLite | 3.49.1 incluido con Python 3.12; FTS5 habilitado | Compatible y validado | Base local para referencias, conversaciones y resúmenes |
 | sqlite-vec | 0.1.9, extensión cargable validada | Compatible, opcional y pre-1.0 | Desactivado hasta definir embeddings y dimensiones |
 | Ollama runtime | 0.32.14 accesible localmente | Compatible y validado | Mantener bind local y no descargar modelos implícitamente |
 | Cliente Python Ollama | Declarado en `requirements.txt` | Compatible | El paquete Python no instala el runtime Ollama |
-| Fooocus | No inventariado/instalado | Pendiente de Fase 2 | Mantener un entorno de runtime aislado para evitar conflictos de PyTorch |
+| Fooocus | Fuente v2.5.5, Python 3.10.11, PyTorch 2.7.1+cu128, activos, checkpoints, cliente 0.5.0 y servidor compatible presentes; CUDA detecta RTX 5060 capability 12.0 | Generación 1024×1024 y cancelaciones durante carga/sampler aprobadas | Validar concurrencia, UI y OOM; no compartir PyTorch con la app |
 | Whisper | Snapshots `small`, `medium` y `large-v3`; faster-whisper 1.2.1 y CTranslate2 4.8.1 | CPU `small` validado dos veces | Validar GPU, micrófono, cancelación, cambio a `medium` y OOM |
 | FFmpeg | No detectado en `PATH` | No bloquea faster-whisper/PyAV | Instalar sólo si otro backend o flujo externo lo requiere |
 | PostgreSQL | PostgreSQL Server 18 activo, inicio automático | Disponible con riesgo de exposición | Integración opcional; revisar bind, firewall y `pg_hba.conf` |
@@ -63,7 +63,16 @@ Todas las rutas de aplicación son configurables. Los valores relativos se resue
 | Base local | `data/runtime/memory.sqlite3` | Referencias, conversaciones, resúmenes e índices; nunca pesos ni multimedia |
 | Base externa | PostgreSQL externo/opcional | Uso futuro para escenarios compartidos; no guardar binarios grandes |
 
-Fooocus deberá ejecutarse con su propio entorno y directorio bajo `data/runtime/fooocus/`. No debe compartir automáticamente el entorno Python principal porque sus restricciones de PyTorch pueden diferir.
+Fooocus se ejecutará desde `data/runtime/fooocus/env` con Python 3.10.11 y su fuente oficial v2.5.5
+está fijada en `data/runtime/fooocus/app` al commit
+`8da1d3ff68942e2d976675939fe72c95746e366e`. No comparte el entorno Python principal porque sus
+restricciones de PyTorch, Gradio, Transformers y NumPy difieren. `requirements-fooocus.txt` declara
+el stack aislado; la aplicación principal conserva Python 3.12 y sólo requiere `gradio-client`.
+
+La release oficial v2.5.5 conserva un stack anterior a Blackwell. La RTX 5060 requiere una variante
+PyTorch CUDA 12.8 con `sm_120`; el soporte propuesto en el repositorio oficial seguía sin integrarse
+al auditarlo el 20 de agosto de 2026. No instalar el bundle oficial sin resolver y validar primero
+esta frontera dentro del entorno Fooocus aislado.
 
 ### Entornos Python de respaldo
 
@@ -138,6 +147,8 @@ Estas comprobaciones no deben descargar un modelo. Una prueba de inferencia se r
    FFmpeg no es requisito de faster-whisper porque PyAV incluye sus bibliotecas.
 3. Revisar la exposición de PostgreSQL 18 antes de configurar credenciales en la aplicación.
 4. Validar los presupuestos con un modelo pequeño, uno mediano y una transcripción de prueba.
+5. Validar intercambio Fooocus con LLM/Whisper, pasada completa de UI y OOM sin permitir descargas
+   automáticas.
 
 ## Fuentes técnicas
 

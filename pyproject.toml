@@ -49,6 +49,7 @@ whisper = [
     "av>=14,<17",
     "sounddevice>=0.5,<1",
 ]
+fooocus = ["gradio-client==0.5.0"]
 dev = [
     "pytest>=8,<10",
     "pytest-cov>=5,<8",
