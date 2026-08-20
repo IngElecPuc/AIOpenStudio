@@ -32,6 +32,8 @@ class AppSettings(BaseSettings):
     ollama_models_dir: Path = Path("ollama")
     huggingface_home: Path = Path("huggingface")
     whisper_models_dir: Path = Path("whisper")
+    whisper_cancel_grace_seconds: float = Field(default=2.0, ge=0.5, le=30)
+    whisper_max_input_bytes: int = Field(default=4 * 1024**3, ge=1024**2)
     fooocus_models_dir: Path = Path("fooocus")
     embedding_models_dir: Path = Path("embeddings")
     model_manifests_dir: Path = Path("manifests")

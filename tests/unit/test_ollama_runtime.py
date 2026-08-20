@@ -60,11 +60,12 @@ class FakeOllamaClient:
         if keep_alive == 0:
             self.running = []
         else:
+            num_gpu = (kwargs.get("options") or {}).get("num_gpu")
             self.running = [
                 {
                     "model": model,
                     "size": 2_400_000_000,
-                    "size_vram": 2_000_000_000,
+                    "size_vram": 0 if num_gpu == 0 else 2_000_000_000,
                     "expires_at": datetime.now(UTC) + timedelta(minutes=10),
                 }
             ]
@@ -100,9 +101,7 @@ class OfflineOllamaClient(FakeOllamaClient):
 
 
 def _request(operation_id: str = "operation-1") -> InferenceRequest:
-    chat_input = ChatInput(
-        messages=(ChatMessage(role=MessageRole.USER, content="Saluda"),)
-    )
+    chat_input = ChatInput(messages=(ChatMessage(role=MessageRole.USER, content="Saluda"),))
     return InferenceRequest(
         operation_id=operation_id,
         model=ModelId(runtime="ollama", name="phi4-mini:latest"),
@@ -131,14 +130,23 @@ def test_catalog_and_lifecycle_are_mapped_without_pulling() -> None:
     asyncio.run(scenario())
 
 
-def test_partial_unload_and_device_selection_are_explicitly_rejected() -> None:
+def test_device_selection_and_temporary_cpu_offload_are_explicit() -> None:
     async def scenario() -> None:
-        runtime = OllamaRuntime("http://test", client=FakeOllamaClient())
+        client = FakeOllamaClient()
+        runtime = OllamaRuntime("http://test", client=client)
         model_id = ModelId(runtime="ollama", name="phi4-mini:latest")
-        with pytest.raises(UnsupportedRuntimeOperationError, match="automáticamente"):
-            await runtime.load(model_id, LoadPolicy(device=ComputeDevice.GPU))
-        with pytest.raises(UnsupportedRuntimeOperationError, match="modelo completo"):
-            await runtime.unload(model_id, UnloadTarget.DEVICE)
+        loaded = await runtime.load(model_id, LoadPolicy(device=ComputeDevice.GPU))
+        offloaded = await runtime.unload(model_id, UnloadTarget.DEVICE)
+
+        assert loaded.loaded_in_gpu
+        assert offloaded.loaded_in_ram
+        assert not offloaded.loaded_in_gpu
+        assert client.generate_calls[0]["options"] == {"num_gpu": -1}
+        assert client.generate_calls[1]["options"] == {"num_gpu": 0}
+        assert client.generate_calls[1]["keep_alive"] == -1
+
+        with pytest.raises(UnsupportedRuntimeOperationError, match="liberar RAM"):
+            await runtime.unload(model_id, UnloadTarget.RAM)
 
     asyncio.run(scenario())
 
@@ -155,11 +163,14 @@ def test_streaming_emits_text_metrics_and_completion() -> None:
             RuntimeEventKind.METRICS,
             RuntimeEventKind.COMPLETED,
         ]
-        assert "".join(
-            str(event.payload["text"])
-            for event in events
-            if event.kind is RuntimeEventKind.TEXT_DELTA
-        ) == "Hola mundo"
+        assert (
+            "".join(
+                str(event.payload["text"])
+                for event in events
+                if event.kind is RuntimeEventKind.TEXT_DELTA
+            )
+            == "Hola mundo"
+        )
 
     asyncio.run(scenario())
 

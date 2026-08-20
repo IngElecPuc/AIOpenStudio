@@ -107,6 +107,7 @@ class RuntimeModelTelemetry(BaseModel):
     owned_by_app: bool = False
     pinned: bool = False
     last_used_at: datetime | None = None
+    process_id: int | None = Field(default=None, gt=0)
 
 
 class RuntimeTelemetry(BaseModel):

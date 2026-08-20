@@ -2,8 +2,8 @@
 
 AIOpenStudio será una aplicación de escritorio en Python para descubrir, ejecutar y administrar modelos de inteligencia artificial locales. La interfaz se construirá con Tkinter y tendrá suites independientes para LLM, Fooocus y Whisper. Ollama será el primer backend de la suite de LLM.
 
-> Estado: Fase 3 completada; la implementación candidata del monitor de la Fase 4 está lista para
-> validación local.
+> Estado: verticales LLM y Monitor aceptadas; suite Whisper implementada y validada en CPU con
+> `small`. Siguen pendientes sus runs GPU, cancelación, micrófono y presión de memoria.
 
 ## Objetivos
 
@@ -20,7 +20,7 @@ AIOpenStudio será una aplicación de escritorio en Python para descubrir, ejecu
 |---|---|---|
 | LLM | Ollama | Chat, generación de texto y administración de modelos de lenguaje |
 | Fooocus | Fooocus | Generación y gestión de imágenes |
-| Whisper | Whisper | Transcripción y procesamiento de audio |
+| Whisper | faster-whisper | Transcripción, exportación y dictado para LLM |
 
 Ollama es un backend, no una suite. Esta distinción permite incorporar otros runners de LLM en el futuro sin rediseñar la interfaz.
 
@@ -71,6 +71,14 @@ python -m pip install -r requirements.txt
 python -m pip install --no-deps -e .
 ```
 
+La suite Whisper y la captura de micrófono son dependencias opcionales:
+
+```powershell
+python -m pip install -e ".[whisper]"
+```
+
+Este comando no descarga pesos. La compatibilidad CUDA se valida por separado antes de usar GPU.
+
 Tkinter forma parte de la instalación estándar de Python en Windows y no se instala con `pip`.
 
 ### PyTorch y GPU
@@ -89,7 +97,7 @@ El monitoreo NVIDIA usará NVML cuando esté disponible. La arquitectura no asum
 
 - Ollama debe instalarse y ejecutarse como servicio local; su URL predeterminada será `http://localhost:11434`.
 - Fooocus se integrará mediante un adaptador de proceso/API, sin copiar su código dentro del núcleo.
-- Whisper tendrá un adaptador local de PyTorch; la variante concreta se seleccionará durante la fase de investigación.
+- Whisper usa faster-whisper/CTranslate2 en un worker local aislado y no descarga modelos desde la UI.
 - PostgreSQL será opcional. La aplicación deberá iniciar sin una base de datos configurada.
 
 Copiar `.env.example` a `.env` cuando se necesite configuración local. `.env` nunca se versiona.
@@ -141,9 +149,14 @@ Iniciar la aplicación:
 .\.venv\Scripts\python.exe -m aiopenstudio
 ```
 
-El tab LLM consulta modelos ya instalados en Ollama, permite carga y liberación completa, conversa
-por streaming, cancela operaciones y guarda el historial en SQLite. No descarga modelos. Whisper y
-Fooocus aparecen como tabs informativos hasta sus respectivas fases.
+El tab LLM consulta modelos ya instalados en Ollama, conversa por streaming y ofrece dictado por
+micrófono mediante Whisper. Si la VRAM no admite ambos modelos, espera a que el LLM quede ocioso, lo
+pasa temporalmente a CPU, transcribe y restaura su residencia GPU.
+
+El tab Whisper abre audio local o graba desde el micrófono, distingue el modelo seleccionado del
+modelo realmente residente, cambia de modelo sin exigir una liberación manual, muestra progreso y
+segmentos, cancela y exporta TXT, JSON, SRT o VTT. Sus runs seguros y reales están en
+[docs/whisper-validation.md](docs/whisper-validation.md).
 
 El tab Monitor muestra CPU, RAM, GPU/VRAM, procesos, residencia por runtime, cola administrada,
 tokens de la última inferencia y una lista segura de configuración Ollama. La recolección puede

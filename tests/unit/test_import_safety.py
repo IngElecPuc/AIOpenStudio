@@ -7,7 +7,7 @@ from pathlib import Path
 def test_imports_do_not_create_local_artifacts(tmp_path: Path) -> None:
     source_dir = Path(__file__).parents[2] / "src"
     environment = os.environ.copy()
-    environment["PYTHONPATH"] = str(source_dir)
+    environment["PYTHONPATH"] = os.pathsep.join((str(source_dir), *sys.path))
 
     result = subprocess.run(
         [

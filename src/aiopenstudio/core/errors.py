@@ -27,3 +27,11 @@ class OperationCancelledError(AIOpenStudioError):
 
 class ResourceLimitError(AIOpenStudioError):
     """Raised when a configured RAM, VRAM or residency policy rejects an operation."""
+
+
+class ResourceExhaustedError(AIOpenStudioError):
+    """Raised when a native runtime exhausts RAM or device memory."""
+
+
+class AudioCaptureUnavailableError(AIOpenStudioError):
+    """Raised when no usable local audio capture backend is installed."""

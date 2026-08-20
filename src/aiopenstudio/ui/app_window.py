@@ -3,10 +3,16 @@
 import tkinter as tk
 from tkinter import ttk
 
-from aiopenstudio.services import LLMService, ResourceMonitorService
+from aiopenstudio.services import (
+    LLMDictationService,
+    LLMService,
+    ResourceMonitorService,
+    TranscriptionService,
+)
 from aiopenstudio.ui.async_runner import AsyncLoopRunner
 from aiopenstudio.ui.tabs.llm import LLMTab
 from aiopenstudio.ui.tabs.monitor import MonitorTab
+from aiopenstudio.ui.tabs.whisper import WhisperTab
 
 
 class ApplicationWindow:
@@ -16,6 +22,8 @@ class ApplicationWindow:
         llm_service: LLMService,
         monitor_service: ResourceMonitorService,
         runner: AsyncLoopRunner,
+        transcription_service: TranscriptionService,
+        dictation_service: LLMDictationService,
     ) -> None:
         root.title("AIOpenStudio")
         root.geometry("1050x720")
@@ -23,12 +31,12 @@ class ApplicationWindow:
 
         notebook = ttk.Notebook(root)
         notebook.pack(fill=tk.BOTH, expand=True)
-        notebook.add(LLMTab(notebook, llm_service, runner), text="LLM")
-        notebook.add(MonitorTab(notebook, monitor_service, runner), text="Monitor")
         notebook.add(
-            _placeholder(notebook, "Suite Whisper", "Se implementará en la fase 5."),
-            text="Whisper",
+            LLMTab(notebook, llm_service, runner, dictation_service),
+            text="LLM",
         )
+        notebook.add(MonitorTab(notebook, monitor_service, runner), text="Monitor")
+        notebook.add(WhisperTab(notebook, transcription_service, runner), text="Whisper")
         notebook.add(
             _placeholder(notebook, "Suite Fooocus", "Se implementará en la fase 6."),
             text="Fooocus",

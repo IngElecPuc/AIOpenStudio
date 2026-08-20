@@ -7,15 +7,23 @@ import tkinter as tk
 from concurrent.futures import TimeoutError as FutureTimeoutError
 
 from aiopenstudio.core.config import AppSettings
+from aiopenstudio.infrastructure.audio import SoundDeviceAudioRecorder
 from aiopenstudio.infrastructure.database import SQLiteStore
 from aiopenstudio.infrastructure.monitoring import (
     InProcessTelemetryRegistry,
     NvidiaTelemetryProvider,
     OllamaTelemetryProvider,
     SystemTelemetryProvider,
+    WhisperTelemetryProvider,
 )
 from aiopenstudio.infrastructure.runtimes.ollama import OllamaRuntime
-from aiopenstudio.services import LLMService, ResourceMonitorService
+from aiopenstudio.infrastructure.runtimes.whisper import FasterWhisperRuntime
+from aiopenstudio.services import (
+    LLMDictationService,
+    LLMService,
+    ResourceMonitorService,
+    TranscriptionService,
+)
 from aiopenstudio.services.logging import LoggingConfigurator
 from aiopenstudio.ui.app_window import ApplicationWindow
 from aiopenstudio.ui.async_runner import AsyncLoopRunner
@@ -35,14 +43,19 @@ def main() -> None:
     )
     store.initialize()
     runtime = OllamaRuntime(str(settings.ollama_base_url))
+    whisper_runtime = FasterWhisperRuntime(
+        settings.resolve_model_library_path(settings.whisper_models_dir),
+        cancel_grace_seconds=settings.whisper_cancel_grace_seconds,
+    )
     monitor_service = ResourceMonitorService(
         providers=(
             SystemTelemetryProvider(),
             NvidiaTelemetryProvider(),
             OllamaTelemetryProvider(str(settings.ollama_base_url)),
             InProcessTelemetryRegistry(),
+            WhisperTelemetryProvider(whisper_runtime),
         ),
-        runtimes={runtime.name: runtime},
+        runtimes={runtime.name: runtime, whisper_runtime.name: whisper_runtime},
         enabled=settings.monitoring_enabled,
         interval_seconds=settings.monitoring_interval_seconds,
         history_samples=settings.monitoring_history_samples,
@@ -61,19 +74,51 @@ def main() -> None:
         metrics_sink=monitor_service,
         residency_policy=monitor_service,
     )
+    audio_recorder = SoundDeviceAudioRecorder()
+    transcription_service = TranscriptionService(
+        runtime=whisper_runtime,
+        catalog=store,
+        residency_policy=monitor_service,
+        resource_monitor=monitor_service,
+        recorder=audio_recorder,
+        recordings_dir=settings.resolve_path(settings.data_dir / "runtime/whisper/recordings"),
+        max_input_bytes=settings.whisper_max_input_bytes,
+    )
+    dictation_service = LLMDictationService(
+        transcription=transcription_service,
+        llm=llm_service,
+        monitor=monitor_service,
+    )
     runner = AsyncLoopRunner()
     runner.start()
 
     root = tk.Tk()
-    ApplicationWindow(root, llm_service, monitor_service, runner)
+    ApplicationWindow(
+        root,
+        llm_service,
+        monitor_service,
+        runner,
+        transcription_service,
+        dictation_service,
+    )
 
     def close_application() -> None:
+        try:
+            runner.submit(transcription_service.cancel_recording()).result(timeout=2)
+        except Exception:
+            logger.exception("Failed to stop microphone capture cleanly")
         try:
             runner.submit(monitor_service.close()).result(timeout=3)
         except FutureTimeoutError:
             logger.warning("Timeout while closing resource telemetry providers")
         except Exception:
             logger.exception("Failed to close resource telemetry providers cleanly")
+        try:
+            runner.submit(whisper_runtime.close()).result(timeout=5)
+        except FutureTimeoutError:
+            logger.warning("Timeout while closing the Whisper worker")
+        except Exception:
+            logger.exception("Failed to close the Whisper worker cleanly")
         try:
             runner.submit(runtime.close()).result(timeout=3)
         except FutureTimeoutError:

@@ -6,7 +6,9 @@ Inventario realizado el **16 de agosto de 2026** en el equipo de desarrollo. Los
 
 El equipo es apto para inferencia local acelerada con PyTorch y CUDA 12.8, con una restricción práctica de aproximadamente 8 GiB de VRAM. Python 3.12 x64 es el runtime elegido. Python 3.14 también está instalado, pero queda fuera del entorno del proyecto para reducir incompatibilidades con runtimes de modelos.
 
-Ollama no fue encontrado como ejecutable, servicio, proceso, directorio estándar ni API local. PostgreSQL 18 sí está activo; actualmente escucha en todas las interfaces en el puerto 5432 y requiere una revisión de exposición antes de usarlo desde la aplicación.
+Ollama 0.32.14 está instalado y respondió a la validación local. PostgreSQL 18 está activo;
+actualmente escucha en todas las interfaces en el puerto 5432 y requiere una revisión de exposición
+antes de usarlo desde la aplicación.
 
 ## Matriz de compatibilidad
 
@@ -27,11 +29,11 @@ Ollama no fue encontrado como ejecutable, servicio, proceso, directorio estánda
 | PyTorch | 2.11.0+cu128 instalado junto con torchvision 0.26.0 y torchaudio 2.11.0 | Compatible y validado: CUDA disponible, RTX 5060 detectada y capability 12.0 | Mantener la integración desacoplada y medir cada modelo antes de admitirlo |
 | SQLite | 3.49.1 incluido con Python 3.12; FTS5 habilitado | Compatible y validado | Base local para referencias, conversaciones y resúmenes |
 | sqlite-vec | 0.1.9, extensión cargable validada | Compatible, opcional y pre-1.0 | Desactivado hasta definir embeddings y dimensiones |
-| Ollama runtime | No detectado; `localhost:11434` sin listener | Bloqueante para la futura vertical Ollama | Instalar y comprobar manualmente antes de Fase 3 |
+| Ollama runtime | 0.32.14 accesible localmente | Compatible y validado | Mantener bind local y no descargar modelos implícitamente |
 | Cliente Python Ollama | Declarado en `requirements.txt` | Compatible | El paquete Python no instala el runtime Ollama |
 | Fooocus | No inventariado/instalado | Pendiente de Fase 2 | Mantener un entorno de runtime aislado para evitar conflictos de PyTorch |
-| Whisper | No inventariado/instalado | Pendiente de Fase 2 | Elegir implementación después de comparar PyTorch y CTranslate2 |
-| FFmpeg | No detectado en `PATH` | Pendiente para audio | Instalar antes de implementar Whisper |
+| Whisper | Snapshots `small`, `medium` y `large-v3`; faster-whisper 1.2.1 y CTranslate2 4.8.1 | CPU `small` validado dos veces | Validar GPU, micrófono, cancelación, cambio a `medium` y OOM |
+| FFmpeg | No detectado en `PATH` | No bloquea faster-whisper/PyAV | Instalar sólo si otro backend o flujo externo lo requiere |
 | PostgreSQL | PostgreSQL Server 18 activo, inicio automático | Disponible con riesgo de exposición | Integración opcional; revisar bind, firewall y `pg_hba.conf` |
 | Almacenamiento | Unidad C: 952,4 GiB totales y 687,9 GiB libres | Suficiente | Aplicar cuotas y no versionar pesos ni outputs |
 
@@ -62,6 +64,14 @@ Todas las rutas de aplicación son configurables. Los valores relativos se resue
 | Base externa | PostgreSQL externo/opcional | Uso futuro para escenarios compartidos; no guardar binarios grandes |
 
 Fooocus deberá ejecutarse con su propio entorno y directorio bajo `data/runtime/fooocus/`. No debe compartir automáticamente el entorno Python principal porque sus restricciones de PyTorch pueden diferir.
+
+### Entornos Python de respaldo
+
+El entorno activo es `.venv`. Existen dos respaldos descartables, `.venv-broken-20260820-104516`
+(aproximadamente 4,93 GB) y `venv-py314-backup` (aproximadamente 171 MB). No contienen datos de la
+aplicación ni pesos y no deben conservarse indefinidamente. Se pueden eliminar con la aplicación
+cerrada cuando `.venv` haya aprobado CPU, GPU y micrófono y se haya confirmado que no guardan una
+configuración única. Su eliminación requiere una autorización explícita separada.
 
 ## Presupuestos y política de residencia
 
@@ -122,9 +132,10 @@ Estas comprobaciones no deben descargar un modelo. Una prueba de inferencia se r
 
 ## Pendientes de cierre
 
-1. Instalar Ollama, confirmar versión y bind local; la ubicación objetivo ya está fijada en la
-   biblioteca compartida mediante `OLLAMA_MODELS`.
-2. Instalar FFmpeg antes de la vertical Whisper.
+1. Confirmar periódicamente que Ollama permanezca ligado localmente; la ubicación objetivo está
+   fijada en la biblioteca compartida mediante `OLLAMA_MODELS`.
+2. Completar los runs Whisper GPU, cancelación, micrófono, cambio a `medium` y presión de memoria;
+   FFmpeg no es requisito de faster-whisper porque PyAV incluye sus bibliotecas.
 3. Revisar la exposición de PostgreSQL 18 antes de configurar credenciales en la aplicación.
 4. Validar los presupuestos con un modelo pequeño, uno mediano y una transcripción de prueba.
 

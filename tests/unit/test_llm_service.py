@@ -228,3 +228,46 @@ def test_service_delegates_cancellation(tmp_path: Path) -> None:
         assert runtime.cancelled == ["operation-2"]
 
     asyncio.run(scenario())
+
+
+def test_service_reports_busy_until_stream_finishes(tmp_path: Path) -> None:
+    class BlockingRuntime(FakeRuntime):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def run(self, request: InferenceRequest) -> AsyncIterator[RuntimeEvent]:
+            self.started.set()
+            yield RuntimeEvent(operation_id=request.operation_id, kind=RuntimeEventKind.STARTED)
+            await self.release.wait()
+            yield RuntimeEvent(operation_id=request.operation_id, kind=RuntimeEventKind.COMPLETED)
+
+    async def scenario() -> None:
+        store = SQLiteStore(tmp_path / "memory.sqlite3")
+        store.initialize()
+        runtime = BlockingRuntime()
+        service = LLMService(runtime=runtime, catalog=store, memory=store)
+        conversation = service.create_conversation()
+
+        async def consume() -> None:
+            _ = [
+                event
+                async for event in service.stream_chat(
+                    operation_id="busy-operation",
+                    conversation_id=conversation.id,
+                    model=runtime.descriptor.id,
+                    prompt="Espera",
+                )
+            ]
+
+        task = asyncio.create_task(consume())
+        await runtime.started.wait()
+        waiter = asyncio.create_task(service.wait_until_idle(runtime.descriptor.id))
+        await asyncio.sleep(0)
+        assert not waiter.done()
+        runtime.release.set()
+        await task
+        await waiter
+
+    asyncio.run(scenario())

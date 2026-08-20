@@ -171,3 +171,26 @@ def test_monitor_disables_collection_and_enforces_limits() -> None:
         assert provider.calls == 0
 
     asyncio.run(scenario())
+
+
+def test_suspended_model_yields_managed_slot_and_remains_owned() -> None:
+    async def scenario() -> None:
+        llm = ModelId(runtime="fake", name="llm")
+        whisper = ModelId(runtime="fake", name="whisper")
+        provider = FakeProvider(_contribution(llm))
+        service = ResourceMonitorService((provider,), {"fake": FakeRuntime()}, max_managed_models=1)
+        state = ModelState(model=llm, gpu_residency=ResidencyState.LOADED)
+        service.model_loaded(state, LoadPolicy(device=ComputeDevice.GPU))
+
+        assert await service.requires_device_yield(whisper, 100)
+        assert service.suspend_model(llm)
+        await service.before_load(whisper, LoadPolicy(device=ComputeDevice.GPU), 100)
+        snapshot = await service.snapshot()
+        assert snapshot.runtimes[0].models[0].owned_by_app
+
+        service.model_load_failed(whisper)
+        service.resume_model(state)
+        with pytest.raises(ResourceLimitError):
+            await service.before_load(whisper, LoadPolicy(), 100)
+
+    asyncio.run(scenario())

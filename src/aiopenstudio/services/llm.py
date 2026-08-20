@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
 from typing import Literal
@@ -11,6 +12,7 @@ from aiopenstudio.core.contracts import (
     ChatInput,
     ChatMessage,
     ChatOptions,
+    ComputeDevice,
     Conversation,
     ConversationMemory,
     ConversationMessage,
@@ -49,6 +51,10 @@ class LLMService:
         self._memory = memory
         self._metrics_sink = metrics_sink
         self._residency_policy = residency_policy
+        self._active_operations: dict[str, int] = {}
+        self._idle_events: dict[str, asyncio.Event] = {}
+        self._load_policies: dict[str, LoadPolicy] = {}
+        self._model_gates: dict[str, asyncio.Lock] = {}
 
     async def health(self) -> RuntimeHealth:
         return await self._runtime.health()
@@ -79,12 +85,14 @@ class LLMService:
             raise
         if self._residency_policy is not None:
             self._residency_policy.model_loaded(state, policy)
+        self._load_policies[model.key] = policy
         return state
 
     async def unload_model(self, model: ModelId) -> ModelState:
         state = await self._runtime.unload(model, UnloadTarget.ALL)
         if self._residency_policy is not None:
             self._residency_policy.model_unloaded(model)
+        self._load_policies.pop(model.key, None)
         return state
 
     async def model_state(self, model: ModelId) -> ModelState:
@@ -152,42 +160,53 @@ class LLMService:
             model=model,
             inputs=chat_input.model_dump(mode="json"),
         )
-        implicit_policy = await self._prepare_inference_residency(model, keep_alive_seconds)
-
         response_parts: list[str] = []
         metrics: dict[str, object] = {}
         cancelled = False
         completed = False
-        async for event in self._run_with_residency(request, implicit_policy):
-            if event.kind is RuntimeEventKind.TEXT_DELTA:
-                text = event.payload.get("text")
-                if isinstance(text, str):
-                    response_parts.append(text)
-            elif event.kind is RuntimeEventKind.METRICS:
-                metrics.update(event.payload)
-                if self._metrics_sink is not None:
-                    self._metrics_sink.record_inference(
-                        InferenceTelemetry(
-                            operation_id=operation_id,
-                            model=model,
-                            input_tokens=_optional_int(event.payload.get("prompt_eval_count")),
-                            output_tokens=_optional_int(event.payload.get("eval_count")),
-                            total_duration_ns=_optional_int(event.payload.get("total_duration")),
-                            load_duration_ns=_optional_int(event.payload.get("load_duration")),
-                            prompt_duration_ns=_optional_int(
-                                event.payload.get("prompt_eval_duration")
-                            ),
-                            generation_duration_ns=_optional_int(
-                                event.payload.get("eval_duration")
-                            ),
-                            done_reason=_optional_str(event.payload.get("done_reason")),
+        gate = self._model_gates.setdefault(model.key, asyncio.Lock())
+        await gate.acquire()
+        self._begin_operation(model)
+        try:
+            implicit_policy = await self._prepare_inference_residency(
+                model,
+                keep_alive_seconds,
+            )
+            async for event in self._run_with_residency(request, implicit_policy):
+                if event.kind is RuntimeEventKind.TEXT_DELTA:
+                    text = event.payload.get("text")
+                    if isinstance(text, str):
+                        response_parts.append(text)
+                elif event.kind is RuntimeEventKind.METRICS:
+                    metrics.update(event.payload)
+                    if self._metrics_sink is not None:
+                        self._metrics_sink.record_inference(
+                            InferenceTelemetry(
+                                operation_id=operation_id,
+                                model=model,
+                                input_tokens=_optional_int(event.payload.get("prompt_eval_count")),
+                                output_tokens=_optional_int(event.payload.get("eval_count")),
+                                total_duration_ns=_optional_int(
+                                    event.payload.get("total_duration")
+                                ),
+                                load_duration_ns=_optional_int(event.payload.get("load_duration")),
+                                prompt_duration_ns=_optional_int(
+                                    event.payload.get("prompt_eval_duration")
+                                ),
+                                generation_duration_ns=_optional_int(
+                                    event.payload.get("eval_duration")
+                                ),
+                                done_reason=_optional_str(event.payload.get("done_reason")),
+                            )
                         )
-                    )
-            elif event.kind is RuntimeEventKind.CANCELLED:
-                cancelled = True
-            elif event.kind is RuntimeEventKind.COMPLETED:
-                completed = True
-            yield event
+                elif event.kind is RuntimeEventKind.CANCELLED:
+                    cancelled = True
+                elif event.kind is RuntimeEventKind.COMPLETED:
+                    completed = True
+                yield event
+        finally:
+            self._end_operation(model)
+            gate.release()
 
         response = "".join(response_parts)
         if response and (completed or cancelled):
@@ -209,6 +228,50 @@ class LLMService:
 
     async def cancel(self, operation_id: str) -> None:
         await self._runtime.cancel(operation_id)
+
+    async def wait_until_idle(self, model: ModelId) -> None:
+        if self._active_operations.get(model.key, 0) == 0:
+            return
+        event = self._idle_events.setdefault(model.key, asyncio.Event())
+        await event.wait()
+
+    async def reserve_model(self, model: ModelId) -> None:
+        gate = self._model_gates.setdefault(model.key, asyncio.Lock())
+        await gate.acquire()
+
+    def release_model_reservation(self, model: ModelId) -> None:
+        gate = self._model_gates.get(model.key)
+        if gate is not None and gate.locked():
+            gate.release()
+
+    async def move_model_to_ram(self, model: ModelId) -> tuple[ModelState, LoadPolicy]:
+        await self.wait_until_idle(model)
+        policy = self._load_policies.get(model.key, LoadPolicy())
+        state = await self._runtime.unload(model, UnloadTarget.DEVICE)
+        return state, policy
+
+    async def restore_model_to_device(
+        self,
+        model: ModelId,
+        policy: LoadPolicy,
+    ) -> ModelState:
+        restored_policy = policy.model_copy(update={"device": ComputeDevice.GPU})
+        state = await self._runtime.load(model, restored_policy)
+        self._load_policies[model.key] = restored_policy
+        return state
+
+    def _begin_operation(self, model: ModelId) -> None:
+        self._active_operations[model.key] = self._active_operations.get(model.key, 0) + 1
+        event = self._idle_events.setdefault(model.key, asyncio.Event())
+        event.clear()
+
+    def _end_operation(self, model: ModelId) -> None:
+        remaining = max(self._active_operations.get(model.key, 1) - 1, 0)
+        if remaining:
+            self._active_operations[model.key] = remaining
+            return
+        self._active_operations.pop(model.key, None)
+        self._idle_events.setdefault(model.key, asyncio.Event()).set()
 
     async def _prepare_inference_residency(
         self,
@@ -250,6 +313,7 @@ class LLMService:
                 else:
                     if state.loaded_in_ram or state.loaded_in_gpu:
                         self._residency_policy.model_loaded(state, implicit_policy)
+                        self._load_policies[request.model.key] = implicit_policy
                     else:
                         self._residency_policy.model_load_failed(request.model)
 

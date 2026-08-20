@@ -12,7 +12,7 @@ from aiopenstudio.core.contracts import (
     InferenceTelemetry,
     LoadPolicy,
     ModelId,
-    ModelRuntime,
+    ModelLifecycleRuntime,
     ModelState,
     ProcessTelemetry,
     ProviderStatus,
@@ -46,7 +46,7 @@ class ResourceMonitorService:
     def __init__(
         self,
         providers: Sequence[TelemetryProvider],
-        runtimes: Mapping[str, ModelRuntime],
+        runtimes: Mapping[str, ModelLifecycleRuntime],
         *,
         enabled: bool = True,
         interval_seconds: float = 1.0,
@@ -72,6 +72,7 @@ class ResourceMonitorService:
         self._vram_soft_limit = vram_soft_limit
         self._vram_hard_limit = vram_hard_limit
         self._managed: dict[str, _ManagedModel] = {}
+        self._suspended: dict[str, _ManagedModel] = {}
         self._queued: dict[str, QueuedModelTelemetry] = {}
         self._inference: dict[str, InferenceTelemetry] = {}
         self._active_snapshot: asyncio.Task[TelemetrySnapshot] | None = None
@@ -206,6 +207,7 @@ class ResourceMonitorService:
         now = datetime.now(UTC)
         self._queued.pop(state.model.key, None)
         self._managed[state.model.key] = _ManagedModel(state.model, policy, now, now)
+        self._suspended.pop(state.model.key, None)
 
     def model_load_failed(self, model: ModelId) -> None:
         self._queued.pop(model.key, None)
@@ -218,6 +220,40 @@ class ResourceMonitorService:
     def model_unloaded(self, model: ModelId) -> None:
         self._queued.pop(model.key, None)
         self._managed.pop(model.key, None)
+        self._suspended.pop(model.key, None)
+
+    def suspend_model(self, model: ModelId) -> bool:
+        managed = self._managed.pop(model.key, None)
+        if managed is None:
+            return False
+        self._suspended[model.key] = managed
+        self._queued.pop(model.key, None)
+        return True
+
+    def resume_model(self, state: ModelState) -> None:
+        suspended = self._suspended.pop(state.model.key, None)
+        if suspended is None:
+            return
+        suspended.last_used_at = datetime.now(UTC)
+        self._managed[state.model.key] = suspended
+
+    async def requires_device_yield(
+        self,
+        requester: ModelId,
+        estimated_vram_bytes: int | None,
+    ) -> bool:
+        await self.snapshot()
+        other_managed = [key for key in self._managed if key != requester.key]
+        if len(other_managed) >= self._max_managed_models:
+            return True
+        if not self._history or estimated_vram_bytes is None:
+            return bool(other_managed)
+        latest = self._history[-1]
+        if not latest.gpus:
+            return False
+        gpu = latest.gpus[0]
+        hard_available = int(gpu.vram_total_bytes * self._vram_hard_limit) - gpu.vram_used_bytes
+        return estimated_vram_bytes > max(hard_available, 0)
 
     async def release_model(self, model: ModelId) -> ModelState:
         runtime = self._runtimes.get(model.runtime)
@@ -272,7 +308,7 @@ class ResourceMonitorService:
     def _annotate_runtime(self, runtime: RuntimeTelemetry) -> RuntimeTelemetry:
         models: list[RuntimeModelTelemetry] = []
         for model in runtime.models:
-            managed = self._managed.get(model.model.key)
+            managed = self._managed.get(model.model.key) or self._suspended.get(model.model.key)
             models.append(
                 model
                 if managed is None

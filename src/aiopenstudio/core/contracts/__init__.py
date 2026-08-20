@@ -44,11 +44,26 @@ from .monitoring import (
 from .runtime import (
     InferenceRequest,
     LoadPolicy,
+    ModelLifecycleRuntime,
     ModelRuntime,
     RuntimeCapabilities,
     RuntimeEvent,
     RuntimeEventKind,
     UnloadTarget,
+)
+from .transcription import (
+    AudioRecorder,
+    TranscriptionEvent,
+    TranscriptionEventKind,
+    TranscriptionOptions,
+    TranscriptionProgress,
+    TranscriptionRequest,
+    TranscriptionResult,
+    TranscriptionRuntime,
+    TranscriptionSegment,
+    TranscriptionStage,
+    TranscriptionTask,
+    TranscriptionWord,
 )
 
 __all__ = [
@@ -65,6 +80,7 @@ __all__ = [
     "InferenceRequest",
     "InferenceTelemetry",
     "LoadPolicy",
+    "ModelLifecycleRuntime",
     "MemorySearchHit",
     "MeasurementQuality",
     "MemoryAllocation",
@@ -95,5 +111,17 @@ __all__ = [
     "TelemetryContribution",
     "TelemetryProvider",
     "TelemetrySnapshot",
+    "AudioRecorder",
+    "TranscriptionEvent",
+    "TranscriptionEventKind",
+    "TranscriptionOptions",
+    "TranscriptionProgress",
+    "TranscriptionRequest",
+    "TranscriptionResult",
+    "TranscriptionRuntime",
+    "TranscriptionSegment",
+    "TranscriptionStage",
+    "TranscriptionTask",
+    "TranscriptionWord",
     "UnloadTarget",
 ]

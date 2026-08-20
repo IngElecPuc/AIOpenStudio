@@ -18,8 +18,9 @@ from aiopenstudio.core.contracts import (
     ModelState,
     RuntimeEvent,
     RuntimeEventKind,
+    TranscriptionEventKind,
 )
-from aiopenstudio.services import LLMService
+from aiopenstudio.services import LLMDictationService, LLMService
 from aiopenstudio.ui.async_runner import AsyncLoopRunner
 
 T = TypeVar("T")
@@ -28,14 +29,22 @@ T = TypeVar("T")
 class LLMTab(ttk.Frame):
     """Chat and lifecycle controls without importing or invoking the Ollama SDK."""
 
-    def __init__(self, parent: tk.Misc, service: LLMService, runner: AsyncLoopRunner) -> None:
+    def __init__(
+        self,
+        parent: tk.Misc,
+        service: LLMService,
+        runner: AsyncLoopRunner,
+        dictation: LLMDictationService | None = None,
+    ) -> None:
         super().__init__(parent, padding=12)
         self._service = service
         self._runner = runner
+        self._dictation = dictation
         self._callbacks: SimpleQueue[Callable[[], None]] = SimpleQueue()
         self._models: dict[str, ModelDescriptor] = {}
         self._conversation_id = service.create_conversation().id
         self._operation_id: str | None = None
+        self._recording = False
 
         self._status = tk.StringVar(value="Ollama: comprobación pendiente")
         self._model_name = tk.StringVar()
@@ -82,7 +91,7 @@ class LLMTab(ttk.Frame):
         composer.grid(row=3, column=0, sticky="ew", pady=(10, 0))
         composer.columnconfigure(0, weight=1)
         self._prompt = tk.Text(composer, height=4, wrap=tk.WORD)
-        self._prompt.grid(row=0, column=0, rowspan=2, sticky="ew")
+        self._prompt.grid(row=0, column=0, rowspan=3, sticky="ew")
         self._send_button = ttk.Button(composer, text="Enviar", command=self._send)
         self._send_button.grid(row=0, column=1, padx=(8, 0), sticky="ew")
         self._cancel_button = ttk.Button(
@@ -92,6 +101,17 @@ class LLMTab(ttk.Frame):
             state=tk.DISABLED,
         )
         self._cancel_button.grid(row=1, column=1, padx=(8, 0), pady=(6, 0), sticky="ew")
+        self._microphone_button = ttk.Button(
+            composer,
+            text="Micrófono",
+            command=self._toggle_microphone,
+            state=(
+                tk.NORMAL
+                if self._dictation is not None and self._dictation.microphone_available
+                else tk.DISABLED
+            ),
+        )
+        self._microphone_button.grid(row=2, column=1, padx=(8, 0), pady=(6, 0), sticky="ew")
 
     def refresh_models(self) -> None:
         self._status.set("Ollama: consultando catálogo…")
@@ -197,6 +217,50 @@ class LLMTab(ttk.Frame):
         self._status.set("Cancelando…")
         self._submit(self._service.cancel(self._operation_id), self._ignore_result)
 
+    def _toggle_microphone(self) -> None:
+        if self._dictation is None:
+            return
+        if not self._recording:
+            self._status.set("Iniciando micrófono…")
+            self._submit(self._dictation.start_recording(), self._recording_started)
+            return
+        self._recording = False
+        self._microphone_button.configure(text="Micrófono", state=tk.DISABLED)
+        self._status.set("Transcribiendo dictado; esperando al LLM si está ocupado…")
+        self._submit(self._stop_and_transcribe(), self._dictation_finished)
+
+    def _recording_started(self, _: object) -> None:
+        self._recording = True
+        self._microphone_button.configure(text="Detener y transcribir")
+        self._status.set("Grabando dictado…")
+
+    async def _stop_and_transcribe(self) -> str:
+        if self._dictation is None:
+            return ""
+        source = await self._dictation.stop_recording()
+        descriptor = self._models.get(self._model_name.get())
+        llm_model = descriptor.id if descriptor is not None else None
+        parts: list[str] = []
+        async for event in self._dictation.transcribe_for_llm(source, llm_model):
+            if event.kind is TranscriptionEventKind.SEGMENT and event.segment is not None:
+                parts.append(event.segment.text)
+        return "".join(parts).strip()
+
+    def _dictation_finished(self, text: str) -> None:
+        if text:
+            current = self._prompt.get("1.0", tk.END).strip()
+            self._prompt.delete("1.0", tk.END)
+            self._prompt.insert("1.0", f"{current} {text}".strip())
+        self._microphone_button.configure(
+            text="Micrófono",
+            state=(
+                tk.NORMAL
+                if self._dictation is not None and self._dictation.microphone_available
+                else tk.DISABLED
+            ),
+        )
+        self._status.set("Dictado transcrito en el mensaje")
+
     def _finish_operation(self, status: str) -> None:
         self._operation_id = None
         self._send_button.configure(state=tk.NORMAL)
@@ -237,6 +301,16 @@ class LLMTab(ttk.Frame):
         return None
 
     def _show_error(self, error: BaseException) -> None:
+        self._recording = False
+        if hasattr(self, "_microphone_button"):
+            self._microphone_button.configure(
+                text="Micrófono",
+                state=(
+                    tk.NORMAL
+                    if self._dictation is not None and self._dictation.microphone_available
+                    else tk.DISABLED
+                ),
+            )
         self._finish_operation("Operación fallida")
         messagebox.showerror("AIOpenStudio", str(error))
 

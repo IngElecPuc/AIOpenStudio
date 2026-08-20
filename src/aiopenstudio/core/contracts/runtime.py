@@ -59,8 +59,8 @@ class RuntimeEvent(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
-class ModelRuntime(Protocol):
-    """Capabilities common to an external or in-process model runner."""
+class ModelLifecycleRuntime(Protocol):
+    """Lifecycle shared by interactive and task-oriented model runners."""
 
     @property
     def name(self) -> str: ...
@@ -87,6 +87,10 @@ class ModelRuntime(Protocol):
     ) -> ModelState: ...
 
     async def state(self, model: ModelId) -> ModelState: ...
+
+
+class ModelRuntime(ModelLifecycleRuntime, Protocol):
+    """Interactive inference runtime used by the LLM suite."""
 
     def run(self, request: InferenceRequest) -> AsyncIterator[RuntimeEvent]: ...
 

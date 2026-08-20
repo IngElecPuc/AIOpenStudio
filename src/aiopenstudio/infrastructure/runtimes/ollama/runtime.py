@@ -42,8 +42,9 @@ class OllamaClient(Protocol):
 
     async def generate(self, model: str, prompt: str = "", **kwargs: Any) -> Any: ...
 
-    async def chat(self, model: str, messages: Sequence[Mapping[str, Any]], **kwargs: Any) -> Any:
-        ...
+    async def chat(
+        self, model: str, messages: Sequence[Mapping[str, Any]], **kwargs: Any
+    ) -> Any: ...
 
 
 class OllamaRuntime:
@@ -62,8 +63,8 @@ class OllamaRuntime:
     def capabilities(self) -> RuntimeCapabilities:
         return RuntimeCapabilities(
             manages_process=False,
-            supports_device_selection=False,
-            supports_partial_unload=False,
+            supports_device_selection=True,
+            supports_partial_unload=True,
             supports_streaming=True,
             supports_cancellation=True,
         )
@@ -137,21 +138,23 @@ class OllamaRuntime:
 
     async def load(self, model: ModelId, policy: LoadPolicy) -> ModelState:
         self._validate_model_id(model)
-        if policy.device is not ComputeDevice.AUTO:
-            raise UnsupportedRuntimeOperationError(
-                "Ollama selecciona CPU/GPU automáticamente y no admite selección por esta API."
-            )
         await self._require_installed(model)
         keep_alive: float | str | None = policy.idle_timeout_seconds
         if policy.pin_in_ram or policy.pin_on_device:
             keep_alive = -1
             self._pinned_models.add(model.name)
         try:
+            options: dict[str, int] | None = None
+            if policy.device is ComputeDevice.CPU:
+                options = {"num_gpu": 0}
+            elif policy.device is ComputeDevice.GPU:
+                options = {"num_gpu": -1}
             await self._client.generate(
                 model=model.name,
                 prompt="",
                 stream=False,
                 keep_alive=keep_alive,
+                options=options,
             )
         except (ConnectionError, OSError) as error:
             raise RuntimeUnavailableError("Ollama dejó de responder durante la carga.") from error
@@ -165,25 +168,35 @@ class OllamaRuntime:
         target: UnloadTarget = UnloadTarget.ALL,
     ) -> ModelState:
         self._validate_model_id(model)
-        if target is not UnloadTarget.ALL:
+        if target is UnloadTarget.RAM:
             raise UnsupportedRuntimeOperationError(
-                "Ollama sólo permite liberar el modelo completo, no RAM y GPU por separado."
+                "Ollama no puede liberar RAM y conservar exclusivamente la residencia GPU."
             )
         await self._require_installed(model)
         try:
-            await self._client.generate(
-                model=model.name,
-                prompt="",
-                stream=False,
-                keep_alive=0,
-            )
+            if target is UnloadTarget.DEVICE:
+                await self._client.generate(
+                    model=model.name,
+                    prompt="",
+                    stream=False,
+                    keep_alive=-1,
+                    options={"num_gpu": 0},
+                )
+            else:
+                await self._client.generate(
+                    model=model.name,
+                    prompt="",
+                    stream=False,
+                    keep_alive=0,
+                )
         except (ConnectionError, OSError) as error:
             raise RuntimeUnavailableError(
                 "Ollama dejó de responder durante la descarga."
             ) from error
         except ResponseError as error:
             raise RuntimeRequestError(str(error)) from error
-        self._pinned_models.discard(model.name)
+        if target is UnloadTarget.ALL:
+            self._pinned_models.discard(model.name)
         return await self.state(model)
 
     async def state(self, model: ModelId) -> ModelState:
