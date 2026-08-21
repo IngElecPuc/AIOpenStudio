@@ -5,7 +5,7 @@
 > GPU, cancelación real, micrófono y escenarios de presión de memoria.
 
 Ningún comando de esta batería descarga modelos. Los snapshots `small`, `medium` y `large-v3` ya
-existen bajo `C:\Users\fario\Documents\AIModels\whisper\Systran`.
+existen bajo la raíz local configurada, por ejemplo `data\models\whisper\Systran`.
 
 ## Calidad segura
 

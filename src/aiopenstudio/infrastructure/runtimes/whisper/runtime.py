@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import logging
 import multiprocessing
 import queue
 import time
+from collections import deque
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 from typing import Any, cast
@@ -44,9 +46,20 @@ _MODEL_FILES = ("config.json", "model.bin", "tokenizer.json")
 class FasterWhisperRuntime:
     """Own one faster-whisper model in a disposable Windows worker process."""
 
-    def __init__(self, models_root: Path, *, cancel_grace_seconds: float = 2.0) -> None:
+    def __init__(
+        self,
+        models_root: Path,
+        *,
+        cancel_grace_seconds: float = 2.0,
+        restart_limit: int = 3,
+        restart_window_seconds: float = 300.0,
+    ) -> None:
         self._models_root = models_root.resolve()
         self._cancel_grace_seconds = cancel_grace_seconds
+        self._restart_limit = restart_limit
+        self._restart_window_seconds = restart_window_seconds
+        self._restart_times: deque[float] = deque()
+        self._logger = logging.getLogger("aiopenstudio.runtime.whisper")
         self._context = multiprocessing.get_context("spawn")
         self._commands: Any | None = None
         self._responses: Any | None = None
@@ -319,6 +332,19 @@ class FasterWhisperRuntime:
     def _ensure_process(self) -> None:
         if self._process is not None and self._process.is_alive():
             return
+        if self._process is not None:
+            exit_code = self._process.exitcode
+            self._register_restart()
+            self._logger.warning(
+                "runtime.worker_restarting",
+                extra={
+                    "component": "whisper",
+                    "runtime": self.name,
+                    "previous_exit_code": exit_code,
+                    "restart_count": len(self._restart_times),
+                },
+            )
+            self._stop_blocking()
         self._commands = self._context.Queue()
         self._responses = self._context.Queue()
         self._cancel_event = self._context.Event()
@@ -330,6 +356,16 @@ class FasterWhisperRuntime:
         )
         process.start()
         self._process = process
+
+    def _register_restart(self) -> None:
+        now = time.monotonic()
+        while self._restart_times and now - self._restart_times[0] > self._restart_window_seconds:
+            self._restart_times.popleft()
+        if len(self._restart_times) >= self._restart_limit:
+            raise RuntimeUnavailableError(
+                "El worker Whisper superó el límite de reinicios; revisa Diagnósticos."
+            )
+        self._restart_times.append(now)
 
     def _request_blocking(self, command: dict[str, Any], timeout: float) -> dict[str, Any]:
         if self._commands is None or self._responses is None:
@@ -349,6 +385,18 @@ class FasterWhisperRuntime:
             if process.is_alive():
                 process.terminate()
                 process.join(timeout=5)
+        if process is not None and not process.is_alive():
+            process.join(timeout=0)
+            try:
+                process.close()
+            except (OSError, ValueError):
+                pass
+        for channel in (self._commands, self._responses):
+            if channel is not None:
+                try:
+                    channel.close()
+                except (OSError, ValueError):
+                    pass
         self._process = None
         self._commands = None
         self._responses = None

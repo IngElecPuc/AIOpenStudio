@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import shutil
 from collections import deque
@@ -26,6 +27,8 @@ class FooocusProcessSettings:
     host: str = "127.0.0.1"
     port: int = 7865
     startup_timeout_seconds: float = 180.0
+    restart_limit: int = 3
+    restart_window_seconds: float = 300.0
 
     @property
     def base_url(self) -> str:
@@ -54,6 +57,8 @@ class FooocusProcessSupervisor:
         self._output_task: asyncio.Task[None] | None = None
         self._logs: deque[str] = deque(maxlen=200)
         self._selected_checkpoint: str | None = None
+        self._restart_times: deque[float] = deque()
+        self._logger = logging.getLogger("aiopenstudio.runtime.fooocus")
 
     @property
     def process_id(self) -> int | None:
@@ -157,6 +162,22 @@ class FooocusProcessSupervisor:
     async def start(self) -> None:
         if self.running:
             return
+        if self._process is not None:
+            exit_code = self._process.returncode
+            if self._output_task is not None:
+                await asyncio.gather(self._output_task, return_exceptions=True)
+            self._process = None
+            self._output_task = None
+            self._register_restart(asyncio.get_running_loop().time())
+            self._logger.warning(
+                "runtime.process_restarting",
+                extra={
+                    "component": "fooocus",
+                    "runtime": "fooocus",
+                    "previous_exit_code": exit_code,
+                    "restart_count": len(self._restart_times),
+                },
+            )
         issues = self.preflight()
         if issues:
             raise RuntimeUnavailableError(" ".join(issues))
@@ -191,6 +212,18 @@ class FooocusProcessSupervisor:
             stderr=asyncio.subprocess.STDOUT,
         )
         self._output_task = asyncio.create_task(self._capture_output())
+
+    def _register_restart(self, now: float) -> None:
+        while (
+            self._restart_times
+            and now - self._restart_times[0] > self.settings.restart_window_seconds
+        ):
+            self._restart_times.popleft()
+        if len(self._restart_times) >= self.settings.restart_limit:
+            raise RuntimeUnavailableError(
+                "Fooocus superó el límite de reinicios; revisa Diagnósticos."
+            )
+        self._restart_times.append(now)
 
     def _launch_arguments(self) -> tuple[str, ...]:
         return (

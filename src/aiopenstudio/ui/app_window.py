@@ -13,6 +13,8 @@ from aiopenstudio.core.contracts import (
     PostgresConnectionResult,
 )
 from aiopenstudio.services import (
+    ApplicationLifecycleService,
+    DiagnosticsService,
     ImageGenerationService,
     LLMDictationService,
     LLMService,
@@ -21,6 +23,8 @@ from aiopenstudio.services import (
     TranscriptionService,
 )
 from aiopenstudio.ui.async_runner import AsyncLoopRunner
+from aiopenstudio.ui.diagnostics import DiagnosticsDialog
+from aiopenstudio.ui.help import HelpDialog
 from aiopenstudio.ui.postgres_settings import PostgresSettingsDialog
 from aiopenstudio.ui.tabs.fooocus import FooocusTab
 from aiopenstudio.ui.tabs.llm import LLMTab
@@ -39,10 +43,14 @@ class ApplicationWindow:
         dictation_service: LLMDictationService,
         image_generation_service: ImageGenerationService,
         persistence_service: PersistenceService,
+        diagnostics_service: DiagnosticsService,
+        lifecycle_service: ApplicationLifecycleService,
     ) -> None:
         self._root = root
         self._runner = runner
         self._persistence = persistence_service
+        self._diagnostics = diagnostics_service
+        self._lifecycle = lifecycle_service
         self._persistence_mode = tk.StringVar(value=PersistenceMode.SQLITE_REPLICATED.value)
         self._callbacks: SimpleQueue[Callable[[], None]] = SimpleQueue()
         root.title("AIOpenStudio")
@@ -50,15 +58,21 @@ class ApplicationWindow:
         root.minsize(800, 560)
         self._build_menu()
 
-        notebook = ttk.Notebook(root)
-        notebook.pack(fill=tk.BOTH, expand=True)
-        notebook.add(
-            LLMTab(notebook, llm_service, runner, dictation_service),
+        self._notebook = ttk.Notebook(root)
+        self._notebook.pack(fill=tk.BOTH, expand=True)
+        self._notebook.add(
+            LLMTab(self._notebook, llm_service, runner, dictation_service),
             text="LLM",
         )
-        notebook.add(MonitorTab(notebook, monitor_service, runner), text="Monitor")
-        notebook.add(WhisperTab(notebook, transcription_service, runner), text="Whisper")
-        notebook.add(FooocusTab(notebook, image_generation_service, runner), text="Fooocus")
+        self._notebook.add(
+            MonitorTab(self._notebook, monitor_service, runner), text="Monitor"
+        )
+        self._notebook.add(
+            WhisperTab(self._notebook, transcription_service, runner), text="Whisper"
+        )
+        self._notebook.add(
+            FooocusTab(self._notebook, image_generation_service, runner), text="Fooocus"
+        )
         root.after(50, self._drain_callbacks)
         root.after(100, self._refresh_persistence_mode)
         root.after(250, self._reconnect_persistence)
@@ -83,8 +97,36 @@ class ApplicationWindow:
                 value=mode.value,
                 command=partial(self._select_persistence_mode, mode),
             )
+        settings_menu.add_separator()
+        settings_menu.add_command(label="Diagnósticos…", command=self._open_diagnostics)
         menu.add_cascade(label="Configuración", menu=settings_menu)
+        help_menu = tk.Menu(menu, tearoff=False)
+        help_menu.add_command(
+            label="Guía de uso…",
+            command=lambda: self._open_help("getting-started"),
+        )
+        help_menu.add_command(
+            label="Solución de problemas…",
+            command=lambda: self._open_help("troubleshooting"),
+        )
+        help_menu.add_separator()
+        help_menu.add_command(label="Diagnósticos…", command=self._open_diagnostics)
+        menu.add_cascade(label="Ayuda", menu=help_menu)
+        self._menu = menu
         self._root.configure(menu=menu)
+
+    def begin_shutdown(self) -> None:
+        self._menu.entryconfigure("Configuración", state=tk.DISABLED)
+        self._menu.entryconfigure("Ayuda", state=tk.DISABLED)
+        self._disable_tree(self._notebook)
+
+    def _disable_tree(self, widget: tk.Misc) -> None:
+        try:
+            widget.configure(state=tk.DISABLED)  # type: ignore[call-arg]
+        except tk.TclError:
+            pass
+        for child in widget.winfo_children():
+            self._disable_tree(child)
 
     def _open_postgres_settings(self) -> None:
         dialog = PostgresSettingsDialog(self._root, self._persistence, self._runner)
@@ -96,6 +138,16 @@ class ApplicationWindow:
                 else None
             ),
             add="+",
+        )
+
+    def _open_diagnostics(self) -> None:
+        DiagnosticsDialog(self._root, self._diagnostics, self._runner)
+
+    def _open_help(self, initial_topic: str) -> None:
+        HelpDialog(
+            self._root,
+            initial_topic=initial_topic,
+            open_diagnostics=self._open_diagnostics,
         )
 
     def _select_persistence_mode(self, mode: PersistenceMode) -> None:
@@ -140,7 +192,7 @@ class ApplicationWindow:
         self._persistence_mode.set(state.profile.mode.value)
 
     def _reconnect_persistence(self) -> None:
-        future = self._runner.submit(self._persistence.reconnect())
+        future = self._runner.submit(self._lifecycle.restore_persistence())
         future.add_done_callback(
             lambda completed: self._callbacks.put(
                 lambda: self._reconnect_completed(completed)

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
 
 from pydantic import SecretStr
 
@@ -12,6 +14,7 @@ from aiopenstudio.core.contracts import (
     ConnectionProfileStore,
     CredentialStore,
     ExecutionRecord,
+    ExecutionStatus,
     LocalPersistenceStore,
     PersistenceConnectionStatus,
     PersistenceMode,
@@ -46,6 +49,7 @@ class PersistenceService:
         self._status = PersistenceConnectionStatus.DISCONNECTED
         self._message = "PostgreSQL no está conectado."
         self._fallback_active = False
+        self._logger = logging.getLogger("aiopenstudio.persistence")
         self._lock = asyncio.Lock()
 
     async def state(self) -> PersistenceState:
@@ -317,6 +321,17 @@ class PersistenceService:
         execution: ExecutionRecord,
         artifacts: Sequence[ArtifactRecord] = (),
     ) -> None:
+        self._logger.info(
+            "execution.status_changed",
+            extra={
+                "component": "persistence",
+                "operation_id": execution.operation_id,
+                "suite": execution.suite,
+                "runtime": execution.runtime,
+                "model": execution.model_key,
+                "status": execution.status.value,
+            },
+        )
         profile = await asyncio.to_thread(self._profiles.load)
         if profile.mode is PersistenceMode.POSTGRES_PRIMARY:
             async with self._lock:
@@ -361,6 +376,28 @@ class PersistenceService:
         ):
             return await asyncio.to_thread(self._repository.list_executions, limit)
         return await asyncio.to_thread(self._local.list_executions, limit)
+
+    async def reconcile_interrupted(self, started_before: datetime) -> int:
+        reconciled = 0
+        for execution in await self.list_executions(limit=500):
+            if execution.status not in {ExecutionStatus.QUEUED, ExecutionStatus.RUNNING}:
+                continue
+            if execution.started_at >= started_before:
+                continue
+            await self.save_execution(
+                execution.model_copy(
+                    update={
+                        "status": ExecutionStatus.INTERRUPTED,
+                        "finished_at": datetime.now(UTC),
+                        "error_message": (
+                            "La ejecución pertenecía a una sesión anterior y no registró "
+                            "un cierre terminal."
+                        ),
+                    }
+                )
+            )
+            reconciled += 1
+        return reconciled
 
     async def close(self) -> None:
         async with self._lock:

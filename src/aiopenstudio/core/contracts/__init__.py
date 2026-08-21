@@ -2,6 +2,12 @@
 
 from .catalog import ModelCatalog
 from .chat import ChatInput, ChatMessage, ChatOptions
+from .diagnostics import (
+    DiagnosticItem,
+    DiagnosticProbe,
+    DiagnosticSnapshot,
+    DiagnosticStatus,
+)
 from .image_generation import (
     ImageArtifact,
     ImageGenerationEvent,
@@ -102,6 +108,10 @@ __all__ = [
     "ChatMessage",
     "ChatOptions",
     "ComputeDevice",
+    "DiagnosticItem",
+    "DiagnosticProbe",
+    "DiagnosticSnapshot",
+    "DiagnosticStatus",
     "Conversation",
     "ConversationMemory",
     "ConversationMessage",

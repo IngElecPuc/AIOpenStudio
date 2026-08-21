@@ -20,6 +20,7 @@ class ExecutionStatus(StrEnum):
     COMPLETED = "completed"
     CANCELLED = "cancelled"
     FAILED = "failed"
+    INTERRUPTED = "interrupted"
 
 
 class PersistenceConnectionStatus(StrEnum):

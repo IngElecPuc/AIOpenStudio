@@ -9,7 +9,8 @@ difíciles de migrar y riesgo de versionar pesos accidentalmente.
 ## Decisión
 
 - Mantener una biblioteca externa común cuya raíz se configura mediante `.env`.
-- Usar `C:\Users\fario\Documents\AIModels` en el equipo actual.
+- Usar una raíz configurable; `data/models` es el valor portable predeterminado y una biblioteca
+  externa puede indicarse mediante `--root` o configuración local ignorada.
 - Guardar en SQLite únicamente metadatos y rutas relativas; los pesos permanecen como archivos.
 - Mantener separado el catálogo compartido de la memoria conversacional propia de cada aplicación.
 - Respetar el almacenamiento interno de Ollama y registrar sus modelos mediante referencias y

@@ -120,7 +120,7 @@ class ModelLibrarySettings(BaseSettings):
         extra="ignore",
     )
 
-    model_library_root: Path = Path(r"C:\Users\fario\Documents\AIModels")
+    model_library_root: Path = Path("data/models")
     model_catalog_path: Path = Path("catalog/model-library.sqlite3")
     ollama_models_dir: Path = Path("ollama")
     huggingface_home: Path = Path("huggingface")

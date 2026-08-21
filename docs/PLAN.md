@@ -150,6 +150,17 @@ aportadas por el usuario, descrita en `docs/postgres-validation.md`.
 
 **Objetivo:** preparar una aplicación mantenible para uso diario.
 
+**Estado:** en progreso. Los seis bloques tienen código implementado: logs JSONL con sesión y
+redacción, diagnóstico exportable, reconciliación de ejecuciones interrumpidas, reinicio acotado de
+workers Whisper/Fooocus y cierre centralizado con persistencia al final. El contrato de distribución
+Windows actualizable ya prohíbe mezclar binarios con datos y exige actualización atómica/rollback.
+La matriz segura automatiza concurrencia GPU, cancelación de espera, presión sintética y cierre. La
+especificación PyInstaller `onedir`, el verificador de privacidad y el ZIP/manifiesto deterministas
+están listos sin instalar herramientas. La ayuda offline, guía pública, solución de problemas,
+inventario estricto de licencias y reporte automatizado de candidatura completan el código previsto.
+Quedan pendientes las pasadas reales, revisión humana de licencias, construir/probar el artefacto en
+Windows limpio y el futuro activador de updates/rollback.
+
 - Añadir logs estructurados, diagnósticos y recuperación ante procesos caídos.
 - Probar concurrencia, cancelación, presión de memoria y cierres limpios.
 - Revisar licencias de código, modelos y redistribución.

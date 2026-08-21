@@ -39,7 +39,7 @@ from aiopenstudio.infrastructure.database.model_library_catalog import (  # noqa
     ModelLibraryCatalog,
 )
 
-DEFAULT_ROOT = Path(r"C:\Users\fario\Documents\AIModels")
+DEFAULT_ROOT = Path("data/models")
 DEFAULT_MANIFEST = REPOSITORY_ROOT / "models" / "download-catalog.json"
 DEFAULT_SCHEMA = REPOSITORY_ROOT / "schemas" / "model-library.sql"
 DEFAULT_ENV_FILE = REPOSITORY_ROOT / ".env"

@@ -194,8 +194,8 @@ Copiar `.env.example` a `.env` cuando se necesite configuración local. `.env` n
 
 ### Biblioteca compartida de modelos
 
-Los pesos no se duplican por repositorio. El equipo actual usa
-`C:\Users\fario\Documents\AIModels` como raíz compartida y conserva en SQLite solo metadatos y
+Los pesos no se duplican por repositorio. La raíz predeterminada portable es `data/models`; puede
+cambiarse mediante `--root` o `AIOPENSTUDIO_MODEL_LIBRARY_ROOT`. SQLite conserva solo metadatos y
 rutas relativas.
 
 Inicializar sin descargar:
@@ -315,6 +315,36 @@ No almacenar contraseñas en `AIOPENSTUDIO_DATABASE_URL`, comandos, logs o archi
 Consulta [docs/postgres-validation.md](docs/postgres-validation.md) para la validación y
 [la decisión arquitectónica](docs/decisions/optional-postgres-replication.md) para las garantías de
 sincronización.
+
+### Diagnósticos y recuperación
+
+`Configuración → Diagnósticos…` consulta sistema, rutas, runtimes y persistencia sin bloquear la
+interfaz. Puede exportar un ZIP redactado con el snapshot y colas finales de logs JSONL; no incluye
+bases, modelos, prompts, respuestas, audios ni imágenes. Las ejecuciones abandonadas por una sesión
+anterior se marcan `interrupted`, los procesos Whisper/Fooocus tienen un presupuesto acotado de
+reinicio y el cierre ordenado conserva persistencia hasta el final. Consulta
+[docs/diagnostics-and-recovery.md](docs/diagnostics-and-recovery.md).
+
+El menú `Ayuda` ofrece una guía offline, ubicación de datos, modos de persistencia, recuperación y
+solución de problemas. Las versiones completas y distribuibles están en
+[docs/user-guide.md](docs/user-guide.md) y
+[docs/troubleshooting.md](docs/troubleshooting.md).
+
+El empaquetado Windows futuro debe cumplir el
+[contrato de distribución actualizable](docs/decisions/update-compatible-windows-distribution.md):
+binarios reemplazables separados de datos, actualización atómica o lado a lado, verificación,
+respaldo y rollback. Las rutas relativas actuales continúan siendo exclusivas del desarrollo.
+
+La especificación `onedir` y sus scripts están descritos en
+[docs/windows-distribution.md](docs/windows-distribution.md). El build rechaza cualquier
+configuración local o ruta `C:\Users\<usuario>` antes de crear el ZIP y manifiesto SHA-256. No se ha
+instalado ni ejecutado PyInstaller todavía.
+
+El build genera además un inventario determinista de dependencias, copia los textos de licencia
+disponibles y falla si alguna licencia queda como `UNKNOWN`. Tras empaquetar, una barrera única
+comprueba bundle, ZIP, manifiesto, documentación y avisos legales, y emite un reporte de candidatura.
+La validación manual obligatoria está en
+[docs/release-checklist.md](docs/release-checklist.md).
 
 ## Desarrollo
 

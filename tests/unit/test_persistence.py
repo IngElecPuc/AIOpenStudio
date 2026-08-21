@@ -315,3 +315,37 @@ def test_persistence_mode_can_be_selected_from_configuration(tmp_path: Path) -> 
         assert sqlite.message == "Modo Solo SQLite activo."
 
     asyncio.run(scenario())
+
+
+def test_previous_session_running_execution_is_reconciled_as_interrupted(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        local = SQLiteStore(tmp_path / "memory.sqlite3")
+        local.initialize()
+        profiles = _MemoryProfileStore(
+            PostgresConnectionProfile(mode=PersistenceMode.SQLITE_ONLY)
+        )
+        service = PersistenceService(
+            local,
+            profiles,
+            _MemoryCredentials(),
+            lambda _profile, _password: _SecondaryRepository(),
+        )
+        execution = ExecutionRecord(
+            operation_id="abandoned-operation",
+            suite="llm",
+            operation_type="chat",
+            status=ExecutionStatus.RUNNING,
+            started_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        await service.save_execution(execution)
+
+        assert await service.reconcile_interrupted(datetime.now(UTC)) == 1
+
+        reconciled = local.list_executions()[0]
+        assert reconciled.status is ExecutionStatus.INTERRUPTED
+        assert reconciled.finished_at is not None
+        assert "sesión anterior" in (reconciled.error_message or "")
+
+    asyncio.run(scenario())

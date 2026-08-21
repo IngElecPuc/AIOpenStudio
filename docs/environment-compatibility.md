@@ -54,8 +54,8 @@ Todas las rutas de aplicación son configurables. Los valores relativos se resue
 | Resultados | `data/outputs/` | Locales, ignorados por Git, separados por ejecución |
 | Caché Hugging Face | `data/cache/huggingface/` | Ignorada por Git; configurar mediante `HF_HOME` |
 | Estado temporal | `data/runtime/` | Ignorado por Git; se puede limpiar con la app cerrada |
-| Logs | `data/logs/` | Ignorados por Git; no registrar prompts ni tokens por defecto |
-| Biblioteca compartida | `C:\Users\fario\Documents\AIModels` | Externa al repositorio; raíz configurada por `.env` |
+| Logs | `data/logs/aiopenstudio.jsonl` | JSONL rotado e ignorado por Git; sesión y eventos estructurados, sin prompts ni tokens por defecto |
+| Biblioteca compartida | `data/models` o ruta externa elegida | Raíz configurable por `--root`/`.env`; nunca fijar una carpeta de usuario en código |
 | Catálogo compartido | `catalog/model-library.sqlite3` bajo la biblioteca | Solo metadatos y rutas relativas; no contiene pesos |
 | Pesos Ollama | `ollama/` bajo la biblioteca | Estructura administrada por Ollama mediante `OLLAMA_MODELS` |
 | Caché Hugging Face | `huggingface/` bajo la biblioteca | Compartida mediante `HF_HOME`; revisiones resueltas antes de registrar |
@@ -123,6 +123,7 @@ Estos límites son valores iniciales y configurables. Se ajustarán con telemetr
 | PostgreSQL expuesto | Se observó `0.0.0.0:5432` y `[::]:5432` | Revisar firewall, `listen_addresses`, TLS y `pg_hba.conf` antes de conectar AIOpenStudio |
 | Procesos externos | Fooocus/Ollama pueden heredar permisos del usuario | Ejecutar sin elevación, con argumentos estructurados, límites y apagado supervisado |
 | Agotamiento de recursos | Varias suites pueden competir por VRAM/RAM/disco | Gestor central de admisión, una carga GPU pesada inicial, cuotas y cancelación |
+| Reinicios repetidos | Un worker nativo puede entrar en un ciclo de crashes | Máximo predeterminado de tres reinicios Whisper/Fooocus en cinco minutos; degradar y diagnosticar al superar el presupuesto |
 | Cadena de suministro | Modelos y paquetes descargables pueden cambiar | Fijar versiones aprobadas, registrar fuente/licencia/hash y evitar instalaciones desde ramas arbitrarias |
 | Datos versionados | Pesos y outputs pueden entrar accidentalmente a Git | `.gitignore` verificado para `.env`, `data/`, pesos, `outputs/` y `cache/` |
 

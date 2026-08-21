@@ -4,7 +4,7 @@ AIOpenStudio usa una biblioteca de pesos externa a los repositorios para evitar 
 entre proyectos. En el equipo actual su raíz es:
 
 ```text
-C:\Users\fario\Documents\AIModels
+data\models
 ```
 
 La biblioteca no reserva espacio en disco ni descarga por sí sola. El script versionado prepara
@@ -131,7 +131,7 @@ ollama --version
 La segunda instrucción debe devolver la raíz compartida de Ollama:
 
 ```text
-C:\Users\fario\Documents\AIModels\ollama
+data\models\ollama
 ```
 
 Antes de iniciar una descarga con el script, cerrar completamente la aplicación de Ollama desde
@@ -179,7 +179,7 @@ No cerrar la terminal mientras la descarga está activa. Si falla, el artefacto 
 ```
 
 La salida debe incluir el artefacto instalado. La misma información se refleja en
-`C:\Users\fario\Documents\AIModels\download-checklist.md`; SQLite sigue siendo la fuente de
+`data\models\download-checklist.md`; SQLite sigue siendo la fuente de
 verdad.
 
 ### 5. Verificar el catálogo de Ollama
