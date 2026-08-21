@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
 from typing import Literal
@@ -16,6 +17,9 @@ from aiopenstudio.core.contracts import (
     Conversation,
     ConversationMemory,
     ConversationMessage,
+    ExecutionHistory,
+    ExecutionRecord,
+    ExecutionStatus,
     InferenceMetricsSink,
     InferenceRequest,
     InferenceTelemetry,
@@ -45,12 +49,14 @@ class LLMService:
         memory: ConversationMemory,
         metrics_sink: InferenceMetricsSink | None = None,
         residency_policy: ResidencyPolicy | None = None,
+        execution_history: ExecutionHistory | None = None,
     ) -> None:
         self._runtime = runtime
         self._catalog = catalog
         self._memory = memory
         self._metrics_sink = metrics_sink
         self._residency_policy = residency_policy
+        self._execution_history = execution_history
         self._active_operations: dict[str, int] = {}
         self._idle_events: dict[str, asyncio.Event] = {}
         self._load_policies: dict[str, LoadPolicy] = {}
@@ -160,10 +166,20 @@ class LLMService:
             model=model,
             inputs=chat_input.model_dump(mode="json"),
         )
+        await self._save_execution(
+            operation_id=operation_id,
+            conversation_id=conversation_id,
+            model=model,
+            prompt=normalized_prompt,
+            chat_input=chat_input,
+            status=ExecutionStatus.RUNNING,
+            started_at=now,
+        )
         response_parts: list[str] = []
         metrics: dict[str, object] = {}
         cancelled = False
         completed = False
+        failed_message: str | None = None
         gate = self._model_gates.setdefault(model.key, asyncio.Lock())
         await gate.acquire()
         self._begin_operation(model)
@@ -203,7 +219,23 @@ class LLMService:
                     cancelled = True
                 elif event.kind is RuntimeEventKind.COMPLETED:
                     completed = True
+                elif event.kind is RuntimeEventKind.ERROR:
+                    failed_message = _optional_str(event.payload.get("message")) or "Runtime error"
                 yield event
+        except Exception as error:
+            await self._save_execution(
+                operation_id=operation_id,
+                conversation_id=conversation_id,
+                model=model,
+                prompt=normalized_prompt,
+                chat_input=chat_input,
+                status=ExecutionStatus.FAILED,
+                started_at=now,
+                metrics=metrics,
+                response="".join(response_parts),
+                error=str(error),
+            )
+            raise
         finally:
             self._end_operation(model)
             gate.release()
@@ -225,6 +257,73 @@ class LLMService:
             self._memory.add_message(assistant_message)
             conversation.updated_at = assistant_message.created_at
             self._memory.save_conversation(conversation)
+        status = (
+            ExecutionStatus.FAILED
+            if failed_message
+            else ExecutionStatus.CANCELLED
+            if cancelled
+            else ExecutionStatus.COMPLETED
+            if completed
+            else ExecutionStatus.FAILED
+        )
+        await self._save_execution(
+            operation_id=operation_id,
+            conversation_id=conversation_id,
+            model=model,
+            prompt=normalized_prompt,
+            chat_input=chat_input,
+            status=status,
+            started_at=now,
+            metrics=metrics,
+            response=response,
+            error=failed_message if failed_message else None,
+        )
+
+    async def _save_execution(
+        self,
+        *,
+        operation_id: str,
+        conversation_id: str,
+        model: ModelId,
+        prompt: str,
+        chat_input: ChatInput,
+        status: ExecutionStatus,
+        started_at: datetime,
+        metrics: dict[str, object] | None = None,
+        response: str = "",
+        error: str | None = None,
+    ) -> None:
+        if self._execution_history is None:
+            return
+        await self._execution_history.save_execution(
+            ExecutionRecord(
+                operation_id=operation_id,
+                suite="llm",
+                operation_type="chat",
+                status=status,
+                runtime=model.runtime,
+                model_key=model.key,
+                started_at=started_at,
+                finished_at=datetime.now(UTC) if status is not ExecutionStatus.RUNNING else None,
+                request_metadata={
+                    "conversation_id": conversation_id,
+                    "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+                    "options": chat_input.options.model_dump(mode="json"),
+                    "keep_alive_seconds": chat_input.keep_alive_seconds,
+                    "thinking_requested": chat_input.think,
+                },
+                result_metadata={
+                    "response_sha256": (
+                        hashlib.sha256(response.encode("utf-8")).hexdigest()
+                        if response
+                        else None
+                    ),
+                    "response_characters": len(response),
+                    "metrics": metrics or {},
+                },
+                error_message=error,
+            )
+        )
 
     async def cancel(self, operation_id: str) -> None:
         await self._runtime.cancel(operation_id)

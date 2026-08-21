@@ -15,7 +15,11 @@ from importlib import import_module
 from pathlib import Path
 
 from aiopenstudio.core.contracts import (
+    ArtifactRecord,
     ComputeDevice,
+    ExecutionHistory,
+    ExecutionRecord,
+    ExecutionStatus,
     ImageArtifact,
     ImageGenerationEvent,
     ImageGenerationEventKind,
@@ -198,6 +202,7 @@ class ImageGenerationService:
         *,
         residency_policy: ResidencyPolicy | None = None,
         resource_monitor: ResourceMonitor | None = None,
+        execution_history: ExecutionHistory | None = None,
     ) -> None:
         self._runtime = runtime
         self._catalog = catalog
@@ -205,6 +210,7 @@ class ImageGenerationService:
         self._device_leases = device_leases
         self._residency_policy = residency_policy
         self._resource_monitor = resource_monitor
+        self._execution_history = execution_history
         self._queue: asyncio.Queue[_QueuedImageJob | None] = asyncio.Queue()
         self._jobs: dict[str, _QueuedImageJob] = {}
         self._worker: asyncio.Task[None] | None = None
@@ -314,10 +320,22 @@ class ImageGenerationService:
     async def _execute(self, job: _QueuedImageJob) -> None:
         request = job.request
         started = time.perf_counter()
+        started_at = datetime.now(UTC)
         await self._run_store.begin(request)
+        await self._save_execution(
+            request,
+            ExecutionStatus.RUNNING,
+            started_at=started_at,
+        )
         if job.cancel_requested:
             result = await self._run_store.finish(
                 request, (), elapsed_seconds=0, status="cancelled"
+            )
+            await self._save_execution(
+                request,
+                ExecutionStatus.CANCELLED,
+                started_at=started_at,
+                result=result,
             )
             await self._emit(job, self._terminal_event(result))
             return
@@ -401,12 +419,19 @@ class ImageGenerationService:
                 await self._release_runtime(request, loaded, lease, warnings)
                 entered = False
             elapsed = time.perf_counter() - started
-            await self._run_store.finish(
+            result = await self._run_store.finish(
                 request,
                 images,
                 elapsed_seconds=elapsed,
                 status="failed",
                 warnings=warnings,
+                error=str(error),
+            )
+            await self._save_execution(
+                request,
+                ExecutionStatus.FAILED,
+                started_at=started_at,
+                result=result,
                 error=str(error),
             )
             await self._emit(
@@ -431,7 +456,80 @@ class ImageGenerationService:
             status="cancelled" if cancelled else "completed",
             warnings=warnings,
         )
+        await self._save_execution(
+            request,
+            ExecutionStatus.CANCELLED if cancelled else ExecutionStatus.COMPLETED,
+            started_at=started_at,
+            result=result,
+        )
         await self._emit(job, self._terminal_event(result))
+
+    async def _save_execution(
+        self,
+        request: ImageGenerationRequest,
+        status: ExecutionStatus,
+        *,
+        started_at: datetime,
+        result: ImageGenerationResult | None = None,
+        error: str | None = None,
+    ) -> None:
+        if self._execution_history is None:
+            return
+        request_metadata = {
+            "prompt_sha256": hashlib.sha256(request.prompt.encode("utf-8")).hexdigest(),
+            "negative_prompt_sha256": hashlib.sha256(
+                request.negative_prompt.encode("utf-8")
+            ).hexdigest(),
+            "options": request.options.model_dump(mode="json"),
+        }
+        result_metadata: dict[str, object] = {}
+        artifacts: tuple[ArtifactRecord, ...] = ()
+        if result is not None:
+            result_metadata = {
+                "elapsed_seconds": result.elapsed_seconds,
+                "cancelled": result.cancelled,
+                "warnings": list(result.warnings),
+                "image_count": len(result.images),
+            }
+            artifacts = tuple(
+                ArtifactRecord(
+                    artifact_id=f"{request.operation_id}-image-{index}",
+                    operation_id=request.operation_id,
+                    kind="image",
+                    path=str(image.path),
+                    mime_type={
+                        ".png": "image/png",
+                        ".jpg": "image/jpeg",
+                        ".jpeg": "image/jpeg",
+                        ".webp": "image/webp",
+                    }.get(image.path.suffix.casefold()),
+                    size_bytes=image.path.stat().st_size if image.path.is_file() else None,
+                    sha256=image.sha256,
+                    metadata={
+                        "width": image.width,
+                        "height": image.height,
+                        "seed": image.seed,
+                        "metadata_path": str(image.metadata_path),
+                    },
+                )
+                for index, image in enumerate(result.images, start=1)
+            )
+        await self._execution_history.save_execution(
+            ExecutionRecord(
+                operation_id=request.operation_id,
+                suite="fooocus",
+                operation_type="image_generation",
+                status=status,
+                runtime=request.model.runtime,
+                model_key=request.model.key,
+                started_at=started_at,
+                finished_at=datetime.now(UTC) if status is not ExecutionStatus.RUNNING else None,
+                request_metadata=request_metadata,
+                result_metadata=result_metadata,
+                error_message=error,
+            ),
+            artifacts,
+        )
 
     async def _release_runtime(
         self,

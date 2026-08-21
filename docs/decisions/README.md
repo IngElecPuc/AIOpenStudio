@@ -7,3 +7,4 @@ Decisiones registradas:
 - [Memoria local con SQLite](local-memory-storage.md)
 - [Biblioteca compartida de modelos](shared-model-library.md)
 - [Ollama como runtime externo de la suite LLM](ollama-runtime-boundary.md)
+- [PostgreSQL como persistencia secundaria opcional](optional-postgres-replication.md)

@@ -5,10 +5,17 @@ from __future__ import annotations
 import logging
 import tkinter as tk
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from pathlib import Path
 
 from aiopenstudio.core.config import AppSettings
 from aiopenstudio.infrastructure.audio import SoundDeviceAudioRecorder
-from aiopenstudio.infrastructure.database import SQLiteStore
+from aiopenstudio.infrastructure.database import (
+    KeyringCredentialStore,
+    PostgresMigrationManager,
+    PostgresProfileStore,
+    PostgresRepository,
+    SQLiteStore,
+)
 from aiopenstudio.infrastructure.monitoring import (
     FooocusTelemetryProvider,
     InProcessTelemetryRegistry,
@@ -31,6 +38,7 @@ from aiopenstudio.services import (
     ImageRunStore,
     LLMDictationService,
     LLMService,
+    PersistenceService,
     ResourceMonitorService,
     TranscriptionService,
 )
@@ -52,6 +60,22 @@ def main() -> None:
         enable_vectors=settings.sqlite_enable_vectors,
     )
     store.initialize()
+    postgres_migrations = PostgresMigrationManager(
+        Path(__file__).resolve().parent / "infrastructure/database/migrations"
+    )
+    persistence_service = PersistenceService(
+        store,
+        PostgresProfileStore(
+            settings.resolve_path(settings.data_dir / "runtime/database/postgres-profile.json")
+        ),
+        KeyringCredentialStore(),
+        lambda profile, password: PostgresRepository(
+            profile,
+            password,
+            migrations=postgres_migrations,
+        ),
+        environment_password=settings.database_password,
+    )
     runtime = OllamaRuntime(str(settings.ollama_base_url))
     whisper_runtime = FasterWhisperRuntime(
         settings.resolve_model_library_path(settings.whisper_models_dir),
@@ -109,6 +133,7 @@ def main() -> None:
         memory=store,
         metrics_sink=monitor_service,
         residency_policy=monitor_service,
+        execution_history=persistence_service,
     )
     audio_recorder = SoundDeviceAudioRecorder()
     transcription_service = TranscriptionService(
@@ -119,6 +144,7 @@ def main() -> None:
         recorder=audio_recorder,
         recordings_dir=settings.resolve_path(settings.data_dir / "runtime/whisper/recordings"),
         max_input_bytes=settings.whisper_max_input_bytes,
+        execution_history=persistence_service,
     )
     dictation_service = LLMDictationService(
         transcription=transcription_service,
@@ -144,6 +170,7 @@ def main() -> None:
         device_leases=device_leases,
         residency_policy=monitor_service,
         resource_monitor=monitor_service,
+        execution_history=persistence_service,
     )
     runner = AsyncLoopRunner()
     runner.start()
@@ -157,9 +184,14 @@ def main() -> None:
         transcription_service,
         dictation_service,
         image_generation_service,
+        persistence_service,
     )
 
     def close_application() -> None:
+        try:
+            runner.submit(persistence_service.close()).result(timeout=3)
+        except Exception:
+            logger.exception("Failed to close PostgreSQL persistence cleanly")
         try:
             runner.submit(image_generation_service.close()).result(timeout=10)
         except FutureTimeoutError:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import uuid
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -19,6 +20,12 @@ from aiopenstudio.core.contracts.memory import (
     MemorySearchHit,
 )
 from aiopenstudio.core.contracts.models import ModelDescriptor, ModelId
+from aiopenstudio.core.contracts.persistence import (
+    ArtifactRecord,
+    ExecutionRecord,
+    PersistenceOutboxEntry,
+    StoredConfiguration,
+)
 
 
 class SQLiteCapabilityError(RuntimeError):
@@ -94,6 +101,63 @@ CREATE VIRTUAL TABLE IF NOT EXISTS conversation_search USING fts5(
     content,
     tokenize='unicode61 remove_diacritics 2'
 );
+
+CREATE TABLE IF NOT EXISTS stored_configurations (
+    namespace TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value_json TEXT NOT NULL,
+    schema_version INTEGER NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(namespace, key)
+);
+
+CREATE TABLE IF NOT EXISTS executions (
+    operation_id TEXT PRIMARY KEY,
+    suite TEXT NOT NULL,
+    operation_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    runtime TEXT,
+    model_key TEXT,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    request_metadata_json TEXT NOT NULL,
+    result_metadata_json TEXT NOT NULL,
+    error_message TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_executions_started
+ON executions(started_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_executions_suite_status
+ON executions(suite, status);
+
+CREATE TABLE IF NOT EXISTS execution_artifacts (
+    artifact_id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES executions(operation_id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    path TEXT NOT NULL,
+    mime_type TEXT,
+    size_bytes INTEGER,
+    sha256 TEXT,
+    metadata_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_execution_artifacts_operation
+ON execution_artifacts(operation_id);
+
+CREATE TABLE IF NOT EXISTS persistence_outbox (
+    event_id TEXT PRIMARY KEY,
+    entity_kind TEXT NOT NULL,
+    entity_key TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_persistence_outbox_created
+ON persistence_outbox(created_at, event_id);
 """
 
 
@@ -124,7 +188,7 @@ class SQLiteStore:
             if not self._has_fts5(connection):
                 raise SQLiteCapabilityError("The active SQLite library does not provide FTS5")
             connection.executescript(_SCHEMA_SQL)
-            connection.execute("PRAGMA user_version = 1")
+            connection.execute("PRAGMA user_version = 2")
         return self.capabilities()
 
     def capabilities(self) -> SQLiteCapabilities:
@@ -355,6 +419,292 @@ class SQLiteStore:
             )
             for row in rows
         ]
+
+    def save_configuration(
+        self,
+        configuration: StoredConfiguration,
+        *,
+        enqueue_secondary: bool = False,
+    ) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO stored_configurations(
+                    namespace, key, value_json, schema_version, updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(namespace, key) DO UPDATE SET
+                    value_json=excluded.value_json,
+                    schema_version=excluded.schema_version,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    configuration.namespace,
+                    configuration.key,
+                    json.dumps(configuration.value, ensure_ascii=False),
+                    configuration.schema_version,
+                    configuration.updated_at.isoformat(),
+                ),
+            )
+            if enqueue_secondary:
+                self._enqueue_outbox(
+                    connection,
+                    "configuration",
+                    f"{configuration.namespace}:{configuration.key}",
+                    {"configuration": configuration.model_dump(mode="json")},
+                )
+
+    def get_configuration(self, namespace: str, key: str) -> StoredConfiguration | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM stored_configurations
+                WHERE namespace = ? AND key = ?
+                """,
+                (namespace, key),
+            ).fetchone()
+        if row is None:
+            return None
+        return StoredConfiguration(
+            namespace=row["namespace"],
+            key=row["key"],
+            value=json.loads(row["value_json"]),
+            schema_version=row["schema_version"],
+            updated_at=row["updated_at"],
+        )
+
+    def save_execution(
+        self,
+        execution: ExecutionRecord,
+        artifacts: Sequence[ArtifactRecord] = (),
+        *,
+        enqueue_secondary: bool = False,
+    ) -> None:
+        with self._connection() as connection:
+            self._upsert_execution(connection, execution, artifacts)
+            if enqueue_secondary:
+                self._enqueue_outbox(
+                    connection,
+                    "execution",
+                    execution.operation_id,
+                    {
+                        "execution": execution.model_dump(mode="json"),
+                        "artifacts": [artifact.model_dump(mode="json") for artifact in artifacts],
+                    },
+                )
+
+    def list_executions(self, limit: int = 100) -> Sequence[ExecutionRecord]:
+        if not 1 <= limit <= 500:
+            raise ValueError("Execution limit must be between 1 and 500")
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM executions
+                ORDER BY started_at DESC, operation_id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [self._execution_from_row(row) for row in rows]
+
+    def pending_outbox(self, limit: int = 100) -> Sequence[PersistenceOutboxEntry]:
+        if not 1 <= limit <= 500:
+            raise ValueError("Outbox limit must be between 1 and 500")
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM persistence_outbox
+                ORDER BY created_at, event_id
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [
+            PersistenceOutboxEntry(
+                event_id=row["event_id"],
+                entity_kind=row["entity_kind"],
+                entity_key=row["entity_key"],
+                payload=json.loads(row["payload_json"]),
+                attempts=row["attempts"],
+            )
+            for row in rows
+        ]
+
+    def pending_outbox_count(self) -> int:
+        with self._connection() as connection:
+            row = connection.execute("SELECT COUNT(*) FROM persistence_outbox").fetchone()
+        return int(row[0]) if row is not None else 0
+
+    def mark_outbox_synced(self, event_id: str) -> None:
+        with self._connection() as connection:
+            connection.execute("DELETE FROM persistence_outbox WHERE event_id = ?", (event_id,))
+
+    def mark_outbox_failed(self, event_id: str, error: str) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                """
+                UPDATE persistence_outbox
+                SET attempts = attempts + 1, last_error = ?
+                WHERE event_id = ?
+                """,
+                (error[:1_000], event_id),
+            )
+
+    def queue_existing_for_secondary(self) -> int:
+        queued = 0
+        with self._connection() as connection:
+            configurations = connection.execute("SELECT * FROM stored_configurations").fetchall()
+            for row in configurations:
+                configuration = StoredConfiguration(
+                    namespace=row["namespace"],
+                    key=row["key"],
+                    value=json.loads(row["value_json"]),
+                    schema_version=row["schema_version"],
+                    updated_at=row["updated_at"],
+                )
+                self._enqueue_outbox(
+                    connection,
+                    "configuration",
+                    f"{configuration.namespace}:{configuration.key}",
+                    {"configuration": configuration.model_dump(mode="json")},
+                )
+                queued += 1
+            executions = connection.execute("SELECT * FROM executions").fetchall()
+            for row in executions:
+                execution = self._execution_from_row(row)
+                artifact_rows = connection.execute(
+                    "SELECT * FROM execution_artifacts WHERE operation_id = ?",
+                    (execution.operation_id,),
+                ).fetchall()
+                artifacts = [self._artifact_from_row(artifact) for artifact in artifact_rows]
+                self._enqueue_outbox(
+                    connection,
+                    "execution",
+                    execution.operation_id,
+                    {
+                        "execution": execution.model_dump(mode="json"),
+                        "artifacts": [artifact.model_dump(mode="json") for artifact in artifacts],
+                    },
+                )
+                queued += 1
+        return queued
+
+    @staticmethod
+    def _upsert_execution(
+        connection: sqlite3.Connection,
+        execution: ExecutionRecord,
+        artifacts: Sequence[ArtifactRecord],
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO executions(
+                operation_id, suite, operation_type, status, runtime, model_key,
+                started_at, finished_at, request_metadata_json,
+                result_metadata_json, error_message
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(operation_id) DO UPDATE SET
+                status=excluded.status,
+                runtime=excluded.runtime,
+                model_key=excluded.model_key,
+                finished_at=excluded.finished_at,
+                request_metadata_json=excluded.request_metadata_json,
+                result_metadata_json=excluded.result_metadata_json,
+                error_message=excluded.error_message
+            """,
+            (
+                execution.operation_id,
+                execution.suite,
+                execution.operation_type,
+                execution.status.value,
+                execution.runtime,
+                execution.model_key,
+                execution.started_at.isoformat(),
+                execution.finished_at.isoformat() if execution.finished_at else None,
+                json.dumps(execution.request_metadata, ensure_ascii=False),
+                json.dumps(execution.result_metadata, ensure_ascii=False),
+                execution.error_message,
+            ),
+        )
+        for artifact in artifacts:
+            connection.execute(
+                """
+                INSERT INTO execution_artifacts(
+                    artifact_id, operation_id, kind, path, mime_type, size_bytes,
+                    sha256, metadata_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(artifact_id) DO UPDATE SET
+                    kind=excluded.kind,
+                    path=excluded.path,
+                    mime_type=excluded.mime_type,
+                    size_bytes=excluded.size_bytes,
+                    sha256=excluded.sha256,
+                    metadata_json=excluded.metadata_json
+                """,
+                (
+                    artifact.artifact_id,
+                    artifact.operation_id,
+                    artifact.kind,
+                    artifact.path,
+                    artifact.mime_type,
+                    artifact.size_bytes,
+                    artifact.sha256,
+                    json.dumps(artifact.metadata, ensure_ascii=False),
+                    artifact.created_at.isoformat(),
+                ),
+            )
+
+    @staticmethod
+    def _enqueue_outbox(
+        connection: sqlite3.Connection,
+        entity_kind: str,
+        entity_key: str,
+        payload: dict[str, object],
+    ) -> None:
+        event_id = str(
+            uuid.uuid5(uuid.NAMESPACE_URL, f"aiopenstudio:{entity_kind}:{entity_key}")
+        )
+        connection.execute(
+            """
+            INSERT INTO persistence_outbox(
+                event_id, entity_kind, entity_key, payload_json, created_at
+            ) VALUES (?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(event_id) DO UPDATE SET
+                payload_json=excluded.payload_json,
+                created_at=excluded.created_at,
+                attempts=0,
+                last_error=NULL
+            """,
+            (event_id, entity_kind, entity_key, json.dumps(payload, ensure_ascii=False)),
+        )
+
+    @staticmethod
+    def _execution_from_row(row: sqlite3.Row) -> ExecutionRecord:
+        return ExecutionRecord(
+            operation_id=row["operation_id"],
+            suite=row["suite"],
+            operation_type=row["operation_type"],
+            status=row["status"],
+            runtime=row["runtime"],
+            model_key=row["model_key"],
+            started_at=row["started_at"],
+            finished_at=row["finished_at"],
+            request_metadata=json.loads(row["request_metadata_json"]),
+            result_metadata=json.loads(row["result_metadata_json"]),
+            error_message=row["error_message"],
+        )
+
+    @staticmethod
+    def _artifact_from_row(row: sqlite3.Row) -> ArtifactRecord:
+        return ArtifactRecord(
+            artifact_id=row["artifact_id"],
+            operation_id=row["operation_id"],
+            kind=row["kind"],
+            path=row["path"],
+            mime_type=row["mime_type"],
+            size_bytes=row["size_bytes"],
+            sha256=row["sha256"],
+            metadata=json.loads(row["metadata_json"]),
+            created_at=row["created_at"],
+        )
 
     @contextmanager
     def _connection(self, *, load_vectors: bool | None = None) -> Iterator[sqlite3.Connection]:

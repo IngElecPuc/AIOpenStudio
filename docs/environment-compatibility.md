@@ -34,7 +34,7 @@ antes de usarlo desde la aplicación.
 | Fooocus | Fuente v2.5.5, Python 3.10.11, PyTorch 2.7.1+cu128, activos, checkpoints, cliente 0.5.0 y servidor compatible presentes; CUDA detecta RTX 5060 capability 12.0 | Generación 1024×1024 y cancelaciones durante carga/sampler aprobadas | Validar concurrencia, UI y OOM; no compartir PyTorch con la app |
 | Whisper | Snapshots `small`, `medium` y `large-v3`; faster-whisper 1.2.1 y CTranslate2 4.8.1 | CPU `small` validado dos veces | Validar GPU, micrófono, cancelación, cambio a `medium` y OOM |
 | FFmpeg | No detectado en `PATH` | No bloquea faster-whisper/PyAV | Instalar sólo si otro backend o flujo externo lo requiere |
-| PostgreSQL | PostgreSQL Server 18 activo, inicio automático | Disponible con riesgo de exposición | Integración opcional; revisar bind, firewall y `pg_hba.conf` |
+| PostgreSQL | PostgreSQL Server 18 activo, inicio automático; integración secundaria local-first implementada; Alembic 1.19.1, psycopg 3.3.4 y WinVaultKeyring instalados | Cliente listo; conexión real pendiente y servidor disponible con riesgo de exposición | SQLite permanece autoritativa; revisar bind, firewall y `pg_hba.conf` antes de introducir secretos y ejecutar la validación optativa |
 | Almacenamiento | Unidad C: 952,4 GiB totales y 687,9 GiB libres | Suficiente | Aplicar cuotas y no versionar pesos ni outputs |
 
 ### Compatibilidad CUDA
@@ -145,7 +145,9 @@ Estas comprobaciones no deben descargar un modelo. Una prueba de inferencia se r
    fijada en la biblioteca compartida mediante `OLLAMA_MODELS`.
 2. Completar los runs Whisper GPU, cancelación, micrófono, cambio a `medium` y presión de memoria;
    FFmpeg no es requisito de faster-whisper porque PyAV incluye sus bibliotecas.
-3. Revisar la exposición de PostgreSQL 18 antes de configurar credenciales en la aplicación.
+3. Revisar la exposición de PostgreSQL 18 antes de configurar credenciales y completar
+   `docs/postgres-validation.md` contra una base dedicada o vacía; el extra `postgres` ya está
+   instalado.
 4. Validar los presupuestos con un modelo pequeño, uno mediano y una transcripción de prueba.
 5. Validar intercambio Fooocus con LLM/Whisper, pasada completa de UI y OOM sin permitir descargas
    automáticas.

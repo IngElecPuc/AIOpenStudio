@@ -187,7 +187,8 @@ El inventario pendiente y los runs están en
 - Fooocus usa un proceso aislado supervisado y Gradio como transporte local en loopback; la
   aplicación no ejecuta su actualizador ni descargas automáticas.
 - Whisper usa faster-whisper/CTranslate2 en un worker local aislado y no descarga modelos desde la UI.
-- PostgreSQL será opcional. La aplicación deberá iniciar sin una base de datos configurada.
+- PostgreSQL es opcional. La aplicación ofrece modo solo SQLite, réplica PostgreSQL y PostgreSQL
+  principal con fallback local; siempre puede iniciar sin servidor disponible.
 
 Copiar `.env.example` a `.env` cuando se necesite configuración local. `.env` nunca se versiona.
 
@@ -223,6 +224,97 @@ Los pesos, audios e imágenes no se guardan dentro de SQLite. Sus archivos viven
 Las decisiones y sus consecuencias están en
 [docs/decisions/local-memory-storage.md](docs/decisions/local-memory-storage.md) y
 [docs/decisions/shared-model-library.md](docs/decisions/shared-model-library.md).
+
+### Persistencia PostgreSQL opcional
+
+El extra no instala otro servidor PostgreSQL. Instala dentro de `.venv` únicamente Alembic
+(migraciones), psycopg (driver cliente) y keyring (almacén seguro de credenciales), además de
+registrar AIOpenStudio en modo editable:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[postgres]"
+```
+
+PostgreSQL 18, si ya está instalado, continúa siendo el único servidor. SQLAlchemy 2.x modela y
+escribe las entidades; psycopg transporta las consultas y Alembic controla la versión de las tablas.
+
+#### Preparar una base vacía
+
+Se recomienda una base dedicada. Puede crearse con pgAdmin, DBeaver o `psql`. El siguiente comando
+abre `psql` y solicita la contraseña de administración de forma interactiva, sin incluirla en la
+línea de comandos:
+
+```powershell
+& "C:\Program Files\PostgreSQL\18\bin\psql.exe" -U postgres -d postgres
+```
+
+Dentro de `psql`, reemplazar los nombres y la contraseña por valores propios:
+
+```sql
+CREATE ROLE aiopenstudio LOGIN PASSWORD '<contraseña-elegida-manualmente>';
+CREATE DATABASE aiopenstudio OWNER aiopenstudio ENCODING 'UTF8';
+```
+
+Si ya existe una base vacía y un usuario con permisos para crear tablas, se pueden usar directamente.
+AIOpenStudio crea o actualiza sus tablas, índices y `alembic_version`; nunca crea el servidor ni la
+base de datos.
+
+#### Configurar desde la aplicación
+
+Iniciar la aplicación:
+
+```powershell
+& .\.venv\Scripts\python.exe -m aiopenstudio
+```
+
+Los tres modos aparecen directamente en `Configuración`, debajo de
+`Conexión PostgreSQL…`. La conexión y sus campos se administran desde ese diálogo:
+
+- Modo de persistencia:
+  - `Solo SQLite`: no conecta ni replica hacia PostgreSQL.
+  - `SQLite + réplica PostgreSQL`: SQLite es autoritativo y el outbox replica a PostgreSQL.
+  - `PostgreSQL principal`: las configuraciones, ejecuciones y metadatos se escriben directamente
+    en PostgreSQL mientras esté conectado.
+- Servidor: normalmente `127.0.0.1` para PostgreSQL local.
+- Puerto: normalmente `5432`.
+- Base de datos: por ejemplo `aiopenstudio`.
+- Usuario y contraseña del rol elegido.
+- SSL/TLS: `prefer` para una instalación local predeterminada; usar `require` cuando el servidor
+  esté configurado para exigir TLS.
+- Timeout: 5 segundos es el valor inicial.
+- `Autocrear o actualizar tablas mediante Alembic`: activar para una base vacía.
+- `Guardar contraseña`: usa Windows Credential Manager mediante `WinVaultKeyring`; no escribe el
+  secreto en el repositorio.
+- `Sincronizar historial local existente`: acción de una sola vez para replicar datos anteriores.
+
+`Probar conexión` verifica autenticación, servidor, base, usuario y revisión Alembic. Con la
+autocreación activa también prepara el esquema vacío. `Conectar y guardar` habilita la réplica y
+persiste el perfil para reconectar al próximo arranque.
+
+Si el servidor no responde durante un reinicio, la aplicación informa el fallo y continúa usando
+SQLite. En modo replicado, SQLite ya contiene la escritura y el outbox queda pendiente. En modo
+PostgreSQL principal, se activa un fallback SQLite y sus operaciones también quedan en el outbox
+para una recuperación posterior. La preferencia guardada **no cambia automáticamente**: el usuario
+debe abrir este diálogo para reconectar o volver manualmente a un modo SQLite. Si PostgreSQL
+principal se deshabilita, la aplicación muestra esta advertencia tanto en el diálogo como al próximo
+arranque.
+
+El alcance PostgreSQL comprende configuraciones, ejecuciones y metadatos de artefactos. La memoria
+conversacional LLM continúa local en SQLite y los binarios permanecen fuera de ambas bases.
+
+El perfil local sin contraseña se guarda bajo `data/runtime/database/`, ignorado por Git. El secreto
+se lee desde `AIOPENSTUDIO_DATABASE_PASSWORD` o, si el usuario lo autoriza en el diálogo, desde el
+almacén seguro del sistema. Para administrarlo manualmente, copiar `.env.example` a `.env` y añadir
+el valor sólo en el archivo ignorado:
+
+```dotenv
+AIOPENSTUDIO_DATABASE_PASSWORD=<definir-manualmente>
+```
+
+No almacenar contraseñas en `AIOPENSTUDIO_DATABASE_URL`, comandos, logs o archivos versionados.
+Consulta [docs/postgres-validation.md](docs/postgres-validation.md) para la validación y
+[la decisión arquitectónica](docs/decisions/optional-postgres-replication.md) para las garantías de
+sincronización.
 
 ## Desarrollo
 

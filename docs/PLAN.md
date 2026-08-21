@@ -130,6 +130,15 @@ Whisper, pasada completa de UI y OOM deliberado.
 
 **Objetivo:** conservar configuraciones, ejecuciones y metadatos cuando se configure una base.
 
+**Estado:** implementación completada el 21 de agosto de 2026. La configuración permite solo
+SQLite, SQLite autoritativo con réplica y PostgreSQL principal. El último escribe directamente en
+PostgreSQL mientras está conectado y activa un fallback SQLite durable ante desconexión sin cambiar
+la preferencia guardada. Un outbox transaccional conserva las escrituras locales pendientes. El
+perfil se administra desde Tkinter, los secretos quedan fuera del repositorio y Alembic puede
+autocrear/actualizar tablas dentro de una base existente. La batería segura está aprobada y el extra
+`postgres` está instalado; queda pendiente ejecutar la validación real/manual con las credenciales
+aportadas por el usuario, descrita en `docs/postgres-validation.md`.
+
 - Diseñar entidades y migraciones; no almacenar binarios grandes en tablas por defecto.
 - Implementar SQLAlchemy 2.x detrás de repositorios/contratos.
 - Validar datos con Pydantic y gestionar credenciales por variables de entorno.
@@ -148,6 +157,47 @@ Whisper, pasada completa de UI y OOM deliberado.
 - Crear guía de usuario y solución de problemas.
 
 **Salida:** candidato de distribución reproducible.
+
+## Fase 9 — Capacidades avanzadas de Fooocus
+
+**Objetivo:** exponer de forma segura y completa las funciones de Fooocus v2.5.5 basadas en
+imágenes de referencia y cerrar las validaciones reales pendientes de la suite.
+
+**Estado:** propuesta. La integración actual continúa limitada a texto-a-imagen; esta fase no
+autoriza instalaciones ni descargas. Cada activo adicional debe inventariarse por origen, licencia,
+tamaño y hash, y requiere aprobación explícita antes de incorporarse.
+
+- Diseñar contratos neutrales que tipen imágenes fuente, máscaras, modo de transformación,
+  intensidad, regiones, controles y resultados sin filtrar componentes ni tipos de Gradio hacia
+  `core`, servicios o UI.
+- Copiar y verificar entradas y máscaras dentro del directorio de cada ejecución, con límites de
+  formato/tamaño, metadatos reproducibles y separación estricta entre archivos fuente, temporales y
+  outputs finales.
+- Incorporar variaciones sutiles y fuertes, upscale 1,5x/2x, inpaint, outpaint, `Image Prompt`,
+  `PyraCanny`, `CPDS`, `FaceSwap`, `Describe` y `Enhance`, incluida la combinación de varias
+  referencias y los parámetros que Fooocus admita para cada modo.
+- Descubrir y validar el esquema Gradio real detrás del adaptador; mantener la UI independiente de
+  índices, etiquetas y detalles del transporte, y fallar de forma localizada si una capacidad no
+  está disponible en la versión instalada.
+- Extender el tab con selección y previsualización de fuentes/máscaras, controles condicionados por
+  capacidad, edición clara de outpaint y regiones, cola, progreso, cancelación, galería y mensajes
+  de preflight accionables.
+- Catalogar antes de usarlos los activos auxiliares requeridos —en particular los de inpaint— y
+  bloquear cualquier descarga o actualización implícita durante preflight, arranque y generación.
+- Preservar la exclusión GPU, la suspensión/restauración de LLM y Whisper, el proceso supervisado,
+  la cola FIFO, la cancelación fuerte, la recuperación ante caída/OOM y la telemetría por ejecución.
+- Añadir pruebas unitarias y de integración optativa para contratos, validación de archivos,
+  argumentos descubiertos, aislamiento de artefactos, capacidades ausentes, cancelación y errores;
+  mantener las pruebas de hardware explícitas y omitibles.
+- Completar una matriz manual con al menos un run real por capacidad y verificar calidad funcional,
+  metadatos, progreso, cancelación, recuperación de recursos y ausencia de descargas inesperadas.
+- Cerrar además los pendientes de la fase 6: intercambio real con un LLM residente y activo,
+  intercambio real con Whisper, recorrido completo del tab —incluidas dos tareas FIFO y
+  cancelaciones activa/en cola— y recuperación después de un OOM deliberado autorizado.
+
+**Salida:** suite Fooocus con todas las capacidades avanzadas enumeradas disponibles mediante
+contratos desacoplados y UI propia, con matriz de validación segura/real documentada y recuperación
+comprobada ante cancelación, conflicto de GPU, fallo del proceso y OOM.
 
 ## Criterios transversales
 

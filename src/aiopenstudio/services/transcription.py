@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from collections.abc import AsyncIterator, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
 from aiopenstudio.core.contracts import (
     AudioRecorder,
     ComputeDevice,
+    ExecutionHistory,
+    ExecutionRecord,
+    ExecutionStatus,
     LoadPolicy,
     ModelCatalog,
     ModelDescriptor,
@@ -42,6 +47,7 @@ class TranscriptionService:
         recorder: AudioRecorder | None = None,
         recordings_dir: Path | None = None,
         max_input_bytes: int = 4 * 1024 * 1024 * 1024,
+        execution_history: ExecutionHistory | None = None,
     ) -> None:
         self._runtime = runtime
         self._catalog = catalog
@@ -50,6 +56,7 @@ class TranscriptionService:
         self._recorder = recorder
         self._recordings_dir = recordings_dir
         self._max_input_bytes = max_input_bytes
+        self._execution_history = execution_history
         self._operation_gate = asyncio.Lock()
         self._load_policies: dict[str, LoadPolicy] = {}
 
@@ -179,6 +186,8 @@ class TranscriptionService:
     ) -> AsyncIterator[TranscriptionEvent]:
         async with self._operation_gate:
             self._validate_source(request.source_path)
+            started_at = datetime.now(UTC)
+            await self._save_execution(request, ExecutionStatus.RUNNING, started_at)
             state = await self._runtime.state(request.model)
             implicit_load = not state.loaded_in_ram and not state.loaded_in_gpu
             if implicit_load:
@@ -186,6 +195,7 @@ class TranscriptionService:
             elif self._residency_policy is not None:
                 self._residency_policy.model_used(request.model)
 
+            terminal_recorded = False
             try:
                 async for event in self._runtime.transcribe(request):
                     if (
@@ -197,10 +207,82 @@ class TranscriptionService:
                         and self._residency_policy is not None
                     ):
                         self._residency_policy.model_used(request.model)
+                    if event.kind in {
+                        TranscriptionEventKind.COMPLETED,
+                        TranscriptionEventKind.CANCELLED,
+                        TranscriptionEventKind.ERROR,
+                    }:
+                        status = {
+                            TranscriptionEventKind.COMPLETED: ExecutionStatus.COMPLETED,
+                            TranscriptionEventKind.CANCELLED: ExecutionStatus.CANCELLED,
+                            TranscriptionEventKind.ERROR: ExecutionStatus.FAILED,
+                        }[event.kind]
+                        await self._save_execution(
+                            request,
+                            status,
+                            started_at,
+                            result=event.result,
+                            error=event.message,
+                        )
+                        terminal_recorded = True
                     yield event
+            except Exception as error:
+                if not terminal_recorded:
+                    await self._save_execution(
+                        request,
+                        ExecutionStatus.FAILED,
+                        started_at,
+                        error=str(error),
+                    )
+                raise
             finally:
                 if self._resource_monitor is not None:
                     await self._resource_monitor.snapshot()
+
+    async def _save_execution(
+        self,
+        request: TranscriptionRequest,
+        status: ExecutionStatus,
+        started_at: datetime,
+        *,
+        result: TranscriptionResult | None = None,
+        error: str | None = None,
+    ) -> None:
+        if self._execution_history is None:
+            return
+        source = request.source_path
+        request_metadata = {
+            "source_name": source.name,
+            "source_path_sha256": hashlib.sha256(str(source).encode("utf-8")).hexdigest(),
+            "source_size_bytes": source.stat().st_size if source.is_file() else None,
+            "options": request.options.model_dump(mode="json"),
+        }
+        result_metadata: dict[str, object] = {}
+        if result is not None:
+            result_metadata = {
+                "language": result.language,
+                "language_probability": result.language_probability,
+                "duration_seconds": result.duration_seconds,
+                "elapsed_seconds": result.elapsed_seconds,
+                "segment_count": len(result.segments),
+                "cancelled": result.cancelled,
+                "text_sha256": hashlib.sha256(result.text.encode("utf-8")).hexdigest(),
+            }
+        await self._execution_history.save_execution(
+            ExecutionRecord(
+                operation_id=request.operation_id,
+                suite="whisper",
+                operation_type=request.options.task.value,
+                status=status,
+                runtime=request.model.runtime,
+                model_key=request.model.key,
+                started_at=started_at,
+                finished_at=datetime.now(UTC) if status is not ExecutionStatus.RUNNING else None,
+                request_metadata=request_metadata,
+                result_metadata=result_metadata,
+                error_message=error,
+            )
+        )
 
     async def cancel(self, operation_id: str) -> None:
         await self._runtime.cancel(operation_id)

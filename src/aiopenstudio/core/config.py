@@ -62,6 +62,7 @@ class AppSettings(BaseSettings):
     monitoring_vram_soft_limit: float = Field(default=0.80, gt=0, lt=1)
     monitoring_vram_hard_limit: float = Field(default=0.90, gt=0, le=1)
     database_url: SecretStr | None = None
+    database_password: SecretStr | None = None
 
     @model_validator(mode="after")
     def validate_monitoring_limits(self) -> Self:

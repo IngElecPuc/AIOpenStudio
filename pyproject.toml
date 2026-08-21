@@ -41,7 +41,11 @@ models = [
     "numpy>=2,<3",
     "soundfile>=0.13,<1",
 ]
-postgres = ["psycopg[binary]>=3.2,<4"]
+postgres = [
+    "alembic>=1.14,<2",
+    "keyring>=25,<26",
+    "psycopg[binary]>=3.2,<4",
+]
 vector = ["sqlite-vec==0.1.9"]
 whisper = [
     "faster-whisper==1.2.1",
@@ -66,12 +70,16 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+aiopenstudio = ["infrastructure/database/migrations/script.py.mako"]
+
 [tool.pytest.ini_options]
 addopts = "-ra --strict-config --strict-markers"
 testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [
     "ollama_integration: read-only checks against an explicitly enabled local Ollama server",
+    "postgres_integration: schema and repository checks against an explicitly enabled PostgreSQL database",
 ]
 
 [tool.ruff]
@@ -87,6 +95,10 @@ python_version = "3.11"
 strict = true
 mypy_path = "src"
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["alembic", "alembic.*", "keyring", "keyring.*"]
+ignore_missing_imports = true
 
 [tool.coverage.run]
 branch = true
