@@ -240,6 +240,8 @@ def download_huggingface(
 class OllamaSession:
     """Own a temporary loopback Ollama server with a controlled model root."""
 
+    STARTUP_TIMEOUT_SECONDS = 90
+
     def __init__(self, settings: ModelLibrarySettings, host: str = "127.0.0.1:11435") -> None:
         self.settings = settings
         self.host = host
@@ -280,14 +282,21 @@ class OllamaSession:
             text=True,
             creationflags=creation_flags,
         )
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            if self.process.poll() is not None:
-                raise DownloadError(f"Ollama terminó durante el arranque; revisa {log_path}")
-            if self._is_ready():
-                return self
-            time.sleep(0.5)
-        raise DownloadError(f"Ollama no respondió dentro de 30 segundos; revisa {log_path}")
+        try:
+            deadline = time.monotonic() + self.STARTUP_TIMEOUT_SECONDS
+            while time.monotonic() < deadline:
+                if self.process.poll() is not None:
+                    raise DownloadError(f"Ollama terminó durante el arranque; revisa {log_path}")
+                if self._is_ready():
+                    return self
+                time.sleep(0.5)
+            raise DownloadError(
+                f"Ollama no respondió dentro de {self.STARTUP_TIMEOUT_SECONDS} segundos; "
+                f"revisa {log_path}"
+            )
+        except BaseException:
+            self._close()
+            raise
 
     def __exit__(
         self,
@@ -295,6 +304,9 @@ class OllamaSession:
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
+        self._close()
+
+    def _close(self) -> None:
         if self.process and self.process.poll() is None:
             self.process.terminate()
             try:
