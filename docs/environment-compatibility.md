@@ -61,6 +61,8 @@ Todas las rutas de aplicación son configurables. Los valores relativos se resue
 | Caché Hugging Face | `huggingface/` bajo la biblioteca | Compartida mediante `HF_HOME`; revisiones resueltas antes de registrar |
 | Whisper, Fooocus y embeddings | `whisper/`, `fooocus/` y `embeddings/` | Pesos reutilizables por varios proyectos; Fooocus reserva `fooocus/rembg/` mediante `U2NET_HOME`; licencias por artefacto |
 | Base local | `data/runtime/memory.sqlite3` | Referencias, conversaciones, resúmenes e índices; nunca pesos ni multimedia |
+| Contexto LLM preparado | `data/runtime/llm/context/prepared/` | PNG normalizado transitorio para el runtime; ignorado por Git |
+| Snapshots LLM | `data/runtime/llm/context/snapshots/` | Copias sólo con consentimiento explícito; privadas, ignoradas y fuera de PostgreSQL |
 | Base externa | PostgreSQL externo/opcional | Uso futuro para escenarios compartidos; no guardar binarios grandes |
 
 Fooocus se ejecutará desde `data/runtime/fooocus/env` con Python 3.10.11 y su fuente oficial v2.5.5
@@ -107,6 +109,8 @@ Estos límites son valores iniciales y configurables. Se ajustarán con telemetr
 - No cargar un modelo si su estimación deja menos de 6 GiB libres.
 - Con uso total del sistema sobre 85 %, liberar modelos inactivos no fijados y detener nuevas admisiones.
 - La muestra inicial solo tenía 8,3 GiB libres: en esa condición se deben cerrar otras aplicaciones o usar modelos pequeños antes de cargar pesos grandes en RAM.
+- El contexto LLM se limita por defecto a 2 MiB por archivo textual, 32 MiB por imagen y 64 MiB en
+  total antes del ensamblado. La estimación de tokens no sustituye la métrica real del runtime.
 
 ### Reglas comunes
 

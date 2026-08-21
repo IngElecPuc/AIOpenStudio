@@ -370,6 +370,19 @@ El tab LLM consulta modelos ya instalados en Ollama, conversa por streaming y of
 micrófono mediante Whisper. Si la VRAM no admite ambos modelos, espera a que el LLM quede ocioso, lo
 pasa temporalmente a CPU, transcribe y restaura su residencia GPU.
 
+Las conversaciones se conservan en SQLite y el tab reabre la más reciente al reiniciar. Incluye
+búsqueda, títulos, archivo/restauración, exportación y borrado confirmado. Los tags de Ollama se
+inspeccionan individualmente mediante `/api/show`; una capacidad no se habilita por el nombre de la
+familia. Consulta la [guía de uso LLM](docs/llm-user-guide.md) y el
+[estado de validación](docs/llm-validation.md).
+
+La capa de servicio LLM ya valida contexto textual UTF-8, imágenes PNG/JPEG/BMP y snapshots
+consentidos. Las referencias quedan deshabilitadas al agregarlas y son efímeras salvo que se active
+su memoria por conversación. Los límites predeterminados son 2 MiB por texto, 32 MiB por imagen,
+64 MiB totales y 25 millones de píxeles; pueden configurarse mediante variables
+`AIOPENSTUDIO_LLM_*`. El tab permite agregar, previsualizar, reordenar, habilitar y recordar la cola,
+además de editar samplers, thinking, presupuesto, resúmenes y salida JSON/JSON Schema.
+
 El tab Whisper abre audio local o graba desde el micrófono, distingue el modelo seleccionado del
 modelo realmente residente, cambia de modelo sin exigir una liberación manual, muestra progreso y
 segmentos, cancela y exporta TXT, JSON, SRT o VTT. Sus runs seguros y reales están en

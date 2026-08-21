@@ -23,6 +23,7 @@ class UnloadTarget(StrEnum):
 
 
 class RuntimeEventKind(StrEnum):
+    PREFLIGHT = "preflight"
     STARTED = "started"
     TEXT_DELTA = "text_delta"
     THINKING_DELTA = "thinking_delta"

@@ -11,9 +11,11 @@ from ollama import AsyncClient, ResponseError
 
 from aiopenstudio.core.contracts import (
     ChatInput,
+    ChatOptions,
     ComputeDevice,
     InferenceRequest,
     LoadPolicy,
+    ModelChatCapabilities,
     ModelDescriptor,
     ModelId,
     ModelState,
@@ -23,6 +25,8 @@ from aiopenstudio.core.contracts import (
     RuntimeEvent,
     RuntimeEventKind,
     RuntimeHealth,
+    StructuredOutputMode,
+    ThinkingCapability,
     UnloadTarget,
 )
 from aiopenstudio.core.errors import (
@@ -40,6 +44,8 @@ class OllamaClient(Protocol):
 
     async def ps(self) -> Any: ...
 
+    async def show(self, model: str) -> Any: ...
+
     async def generate(self, model: str, prompt: str = "", **kwargs: Any) -> Any: ...
 
     async def chat(
@@ -54,6 +60,7 @@ class OllamaRuntime:
         self._client = client or cast(OllamaClient, AsyncClient(host=base_url))
         self._operations: dict[str, asyncio.Task[Any]] = {}
         self._pinned_models: set[str] = set()
+        self._model_details_cache: dict[str, tuple[str | None, dict[str, Any]]] = {}
 
     @property
     def name(self) -> str:
@@ -115,26 +122,49 @@ class OllamaRuntime:
             name = _string_value(model, "model")
             if not name:
                 continue
+            digest = _string_value(model, "digest")
             details = _value(model, "details")
-            metadata = {
-                "digest": _string_value(model, "digest"),
+            metadata: dict[str, Any] = {
+                "digest": digest,
                 "modified_at": _iso_value(_value(model, "modified_at")),
                 "format": _string_value(details, "format"),
                 "family": _string_value(details, "family"),
                 "parameter_size": _string_value(details, "parameter_size"),
                 "quantization_level": _string_value(details, "quantization_level"),
             }
+            declared_capabilities: frozenset[str] = frozenset()
+            try:
+                inspected = await self._show_model(name, digest)
+            except (ConnectionError, OSError, ResponseError) as error:
+                metadata["capability_inspection_error"] = " ".join(str(error).split())[:300]
+                capabilities = frozenset({"chat", "text-generation"})
+            else:
+                chat_capabilities = _chat_capabilities(inspected, digest)
+                metadata["chat_capabilities"] = chat_capabilities.model_dump(mode="json")
+                declared_capabilities = chat_capabilities.declared
+                capabilities = frozenset(declared_capabilities)
+                if "completion" in declared_capabilities:
+                    capabilities = capabilities | {"chat", "text-generation"}
             descriptors.append(
                 ModelDescriptor(
                     id=ModelId(runtime=self.name, name=name),
                     display_name=name,
-                    capabilities=frozenset({"chat", "text-generation"}),
+                    capabilities=capabilities,
                     size_bytes=_int_value(model, "size"),
                     installed=True,
                     metadata={key: value for key, value in metadata.items() if value},
                 )
             )
         return sorted(descriptors, key=lambda descriptor: descriptor.display_name.casefold())
+
+    async def _show_model(self, name: str, digest: str | None) -> dict[str, Any]:
+        cached = self._model_details_cache.get(name)
+        if cached is not None and cached[0] == digest:
+            return cached[1]
+        response = await self._client.show(name)
+        normalized = _mapping_value(response)
+        self._model_details_cache[name] = (digest, normalized)
+        return normalized
 
     async def load(self, model: ModelId, policy: LoadPolicy) -> ModelState:
         self._validate_model_id(model)
@@ -260,24 +290,43 @@ class OllamaRuntime:
             raise RuntimeRequestError(f"La operación {request.operation_id!r} ya está activa.")
         self._operations[request.operation_id] = task
 
-        messages = [
-            {"role": message.role.value, "content": message.content}
-            for message in chat_input.messages
-        ]
+        messages: list[dict[str, Any]] = []
+        if chat_input.system_prompt:
+            messages.append({"role": "system", "content": chat_input.system_prompt})
+        for message in chat_input.messages:
+            payload: dict[str, Any] = {
+                "role": message.role.value,
+                "content": message.content,
+            }
+            if message.images:
+                try:
+                    payload["images"] = [image.path.read_bytes() for image in message.images]
+                except OSError as error:
+                    raise RuntimeRequestError(
+                        "No fue posible leer una imagen de contexto preparada."
+                    ) from error
+            messages.append(payload)
         try:
             yield RuntimeEvent(operation_id=request.operation_id, kind=RuntimeEventKind.STARTED)
+            chat_arguments: dict[str, Any] = {
+                "stream": True,
+                "think": chat_input.think,
+                "options": chat_input.options.runtime_options(),
+                "keep_alive": chat_input.keep_alive_seconds,
+            }
+            if chat_input.output.mode is StructuredOutputMode.JSON:
+                chat_arguments["format"] = "json"
+            elif chat_input.output.mode is StructuredOutputMode.JSON_SCHEMA:
+                chat_arguments["format"] = chat_input.output.json_schema
             stream = await self._client.chat(
                 model=request.model.name,
                 messages=messages,
-                stream=True,
-                think=chat_input.think,
-                options=chat_input.options.runtime_options(),
-                keep_alive=chat_input.keep_alive_seconds,
+                **chat_arguments,
             )
             async for chunk in cast(AsyncIterator[Any], stream):
-                message = _value(chunk, "message")
-                text = _string_value(message, "content")
-                thinking = _string_value(message, "thinking")
+                response_message = _value(chunk, "message")
+                text = _string_value(response_message, "content")
+                thinking = _string_value(response_message, "thinking")
                 if text:
                     yield RuntimeEvent(
                         operation_id=request.operation_id,
@@ -338,6 +387,17 @@ def _value(source: object, key: str) -> object | None:
     return getattr(source, key, None)
 
 
+def _mapping_value(source: object) -> dict[str, Any]:
+    if isinstance(source, Mapping):
+        return {str(key): value for key, value in source.items()}
+    model_dump = getattr(source, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump()
+        if isinstance(dumped, Mapping):
+            return {str(key): value for key, value in dumped.items()}
+    return {}
+
+
 def _sequence_value(source: object, key: str) -> Sequence[object]:
     value = _value(source, key)
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
@@ -372,3 +432,99 @@ def _completion_metrics(chunk: object) -> dict[str, Any]:
         "done_reason",
     )
     return {field: value for field in fields if (value := _value(chunk, field)) is not None}
+
+
+def _chat_capabilities(details: Mapping[str, Any], digest: str | None) -> ModelChatCapabilities:
+    declared = frozenset(
+        str(value).strip().casefold()
+        for value in _sequence_value(details, "capabilities")
+        if str(value).strip()
+    )
+    thinking = (
+        ThinkingCapability.DECLARED
+        if "thinking" in declared
+        else ThinkingCapability.UNAVAILABLE
+    )
+    return ModelChatCapabilities(
+        model_digest=digest,
+        declared=declared,
+        supports_vision="vision" in declared,
+        thinking=thinking,
+        supports_tools="tools" in declared,
+        # Ollama's chat endpoint accepts ``format`` for installed completion models.
+        # Model adherence is checked locally before marking the response complete.
+        supports_structured_output="completion" in declared,
+        max_context_tokens=_maximum_context_length(_value(details, "model_info")),
+        max_images_per_message=1 if "vision" in declared else None,
+        estimated_tokens_per_image=_tokens_per_image(_value(details, "model_info")),
+        defaults=_parse_model_parameters(_string_value(details, "parameters") or ""),
+    )
+
+
+def _maximum_context_length(model_info: object | None) -> int | None:
+    if not isinstance(model_info, Mapping):
+        return None
+    candidates = [
+        int(value)
+        for key, value in model_info.items()
+        if str(key).endswith(".context_length")
+        and isinstance(value, (int, float))
+        and value > 0
+    ]
+    return max(candidates, default=None)
+
+
+def _tokens_per_image(model_info: object | None) -> int | None:
+    if not isinstance(model_info, Mapping):
+        return None
+    candidates = [
+        int(value)
+        for key, value in model_info.items()
+        if str(key).endswith(".mm.tokens_per_image")
+        and isinstance(value, (int, float))
+        and value > 0
+    ]
+    return max(candidates, default=None)
+
+
+def _parse_model_parameters(parameters: str) -> ChatOptions:
+    values: dict[str, Any] = {}
+    stops: list[str] = []
+    integer_fields = {
+        "top_k": "top_k",
+        "seed": "seed",
+        "num_ctx": "context_length",
+        "num_predict": "max_new_tokens",
+    }
+    float_fields = {
+        "temperature": "temperature",
+        "top_p": "top_p",
+        "min_p": "min_p",
+        "repeat_penalty": "repeat_penalty",
+    }
+    for line in parameters.splitlines():
+        name, separator, raw_value = line.strip().partition(" ")
+        if not separator:
+            continue
+        value = raw_value.strip()
+        if name == "stop":
+            stops.append(value.strip('"'))
+            continue
+        try:
+            if name in integer_fields:
+                parsed: int | float = int(value)
+                if name == "num_predict" and parsed < 1:
+                    continue
+                if name == "num_ctx" and parsed < 128:
+                    continue
+                values[integer_fields[name]] = parsed
+            elif name in float_fields:
+                values[float_fields[name]] = float(value)
+        except ValueError:
+            continue
+    if stops:
+        values["stop"] = tuple(stops)
+    try:
+        return ChatOptions.model_validate(values)
+    except ValueError:
+        return ChatOptions()

@@ -1,19 +1,25 @@
 import asyncio
 from collections.abc import AsyncIterator, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from aiopenstudio.core.contracts import (
+    ChatImage,
     ChatInput,
     ChatMessage,
+    ChatOptions,
     ComputeDevice,
     InferenceRequest,
     LoadPolicy,
     MessageRole,
     ModelId,
     RuntimeEventKind,
+    StructuredOutputMode,
+    StructuredOutputSpec,
+    ThinkingCapability,
     UnloadTarget,
 )
 from aiopenstudio.core.errors import (
@@ -41,6 +47,8 @@ class FakeOllamaClient:
         ]
         self.running: list[dict[str, Any]] = []
         self.generate_calls: list[dict[str, Any]] = []
+        self.chat_calls: list[dict[str, Any]] = []
+        self.show_calls: list[str] = []
         self.chat_started = asyncio.Event()
         self.block_chat = False
         self.closed = False
@@ -53,6 +61,20 @@ class FakeOllamaClient:
 
     async def ps(self) -> Any:
         return {"models": self.running}
+
+    async def show(self, model: str) -> Any:
+        self.show_calls.append(model)
+        return {
+            "capabilities": ["completion", "vision", "thinking", "tools"],
+            "parameters": (
+                'temperature 0.2\ntop_p 0.8\ntop_k 20\nmin_p 0.05\n'
+                'repeat_penalty 1.1\nnum_ctx 4096\nstop "<end>"'
+            ),
+            "model_info": {
+                "phi3.context_length": 131_072,
+                "phi3.mm.tokens_per_image": 256,
+            },
+        }
 
     async def generate(self, model: str, prompt: str = "", **kwargs: Any) -> Any:
         self.generate_calls.append({"model": model, "prompt": prompt, **kwargs})
@@ -77,6 +99,8 @@ class FakeOllamaClient:
         messages: Sequence[Mapping[str, Any]],
         **kwargs: Any,
     ) -> Any:
+        self.chat_calls.append({"model": model, "messages": messages, **kwargs})
+
         async def chunks() -> AsyncIterator[dict[str, Any]]:
             self.chat_started.set()
             if self.block_chat:
@@ -100,6 +124,11 @@ class OfflineOllamaClient(FakeOllamaClient):
         raise ConnectionError("offline")
 
 
+class UninspectableOllamaClient(FakeOllamaClient):
+    async def show(self, model: str) -> Any:
+        raise ConnectionError(f"cannot inspect {model}")
+
+
 def _request(operation_id: str = "operation-1") -> InferenceRequest:
     chat_input = ChatInput(messages=(ChatMessage(role=MessageRole.USER, content="Saluda"),))
     return InferenceRequest(
@@ -120,12 +149,87 @@ def test_catalog_and_lifecycle_are_mapped_without_pulling() -> None:
         unloaded = await runtime.unload(model_id)
 
         assert models[0].metadata["quantization_level"] == "Q4_K_M"
+        capabilities = models[0].metadata["chat_capabilities"]
+        assert capabilities["supports_vision"] is True
+        assert capabilities["thinking"] == ThinkingCapability.DECLARED.value
+        assert capabilities["max_context_tokens"] == 131_072
+        assert capabilities["estimated_tokens_per_image"] == 256
+        assert capabilities["defaults"]["min_p"] == 0.05
+        assert client.show_calls == ["phi4-mini:latest"]
         assert loaded.active_device is ComputeDevice.GPU
         assert loaded.vram_bytes == 2_000_000_000
         assert loaded.ram_bytes == 400_000_000
         assert not unloaded.loaded_in_ram
         assert not unloaded.loaded_in_gpu
         assert [call["keep_alive"] for call in client.generate_calls] == [600.0, 0]
+
+    asyncio.run(scenario())
+
+
+def test_chat_maps_neutral_settings_system_prompt_and_images(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        client = FakeOllamaClient()
+        runtime = OllamaRuntime("http://test", client=client)
+        prepared_image = tmp_path / "prepared.png"
+        prepared_image.write_bytes(b"validated-image-payload")
+        chat_input = ChatInput(
+            messages=(
+                ChatMessage(
+                    role=MessageRole.USER,
+                    content="Saluda",
+                    images=(
+                        ChatImage(
+                            path=prepared_image,
+                            mime_type="image/png",
+                            sha256="a" * 64,
+                            width=16,
+                            height=16,
+                        ),
+                    ),
+                ),
+            ),
+            system_prompt="Responde brevemente.",
+            options=ChatOptions(min_p=0.1, repeat_penalty=1.2),
+            output=StructuredOutputSpec(
+                mode=StructuredOutputMode.JSON_SCHEMA,
+                json_schema={
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}},
+                },
+            ),
+        )
+        request = InferenceRequest(
+            operation_id="settings",
+            model=ModelId(runtime="ollama", name="phi4-mini:latest"),
+            inputs=chat_input.model_dump(mode="json"),
+        )
+
+        _ = [event async for event in runtime.run(request)]
+
+        call = client.chat_calls[0]
+        assert call["messages"][0] == {
+            "role": "system",
+            "content": "Responde brevemente.",
+        }
+        assert call["options"] == {"min_p": 0.1, "repeat_penalty": 1.2}
+        assert call["format"] == {
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+        }
+        assert call["messages"][1]["images"] == [b"validated-image-payload"]
+
+    asyncio.run(scenario())
+
+
+def test_one_failed_capability_inspection_does_not_hide_installed_model() -> None:
+    async def scenario() -> None:
+        runtime = OllamaRuntime("http://test", client=UninspectableOllamaClient())
+
+        models = await runtime.list_models()
+
+        assert models[0].installed
+        assert models[0].capabilities == frozenset({"chat", "text-generation"})
+        assert "cannot inspect" in models[0].metadata["capability_inspection_error"]
 
     asyncio.run(scenario())
 

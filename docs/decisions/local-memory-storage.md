@@ -12,6 +12,9 @@ AIOpenStudio debe recordar modelos disponibles, rutas de pesos, conversaciones, 
 - Guardar pesos, audios e imágenes como archivos; SQLite conserva sus rutas y metadatos, no sus bytes.
 - Permitir rutas absolutas externas mediante `.env` o rutas relativas bajo `data/`, que está ignorado por Git.
 - Mantener PostgreSQL como integración opcional para escenarios que necesiten una base compartida o más robusta.
+- Mantener conversaciones, mensajes, resúmenes y referencias de contexto exclusivamente en SQLite
+  mientras no exista una política de privacidad separada y aceptada. Elegir PostgreSQL principal
+  para configuraciones y ejecuciones no replica contenido conversacional de forma implícita.
 
 ## Consecuencias
 
@@ -21,6 +24,8 @@ AIOpenStudio debe recordar modelos disponibles, rutas de pesos, conversaciones, 
 - La API pre-1.0 de `sqlite-vec` obliga a fijar la versión y revisar cualquier actualización.
 - Los servicios deben ejecutar operaciones SQLite fuera del hilo principal de Tkinter.
 - Las copias de seguridad deben incluir el archivo SQLite y, por separado, los directorios de activos que se quieran conservar.
+- Archivar conserva contenido; eliminar una conversación borra en cascada sus mensajes, resúmenes y
+  referencias administradas, pero nunca elimina archivos externos del usuario.
 
 ## Fuentes
 

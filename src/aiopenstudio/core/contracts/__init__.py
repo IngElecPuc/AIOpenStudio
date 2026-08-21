@@ -1,7 +1,22 @@
 """Public contracts shared by services and infrastructure adapters."""
 
 from .catalog import ModelCatalog
-from .chat import ChatInput, ChatMessage, ChatOptions
+from .chat import (
+    ChatImage,
+    ChatInput,
+    ChatMessage,
+    ChatOptions,
+    ModelChatCapabilities,
+    StructuredOutputMode,
+    StructuredOutputSpec,
+    ThinkingCapability,
+)
+from .context import (
+    ContextInspection,
+    ContextItemState,
+    PreparedContext,
+    PreparedContextBatch,
+)
 from .diagnostics import (
     DiagnosticItem,
     DiagnosticProbe,
@@ -32,12 +47,18 @@ from .image_generation import (
     OutpaintDirection,
 )
 from .memory import (
+    ContextKind,
+    ContextSendPolicy,
+    ContextStoragePolicy,
     Conversation,
+    ConversationContextItem,
     ConversationMemory,
     ConversationMessage,
     ConversationSummary,
+    ConversationTitleOrigin,
     MemorySearchHit,
     MessageRole,
+    MessageStatus,
 )
 from .models import (
     ComputeDevice,
@@ -89,6 +110,7 @@ from .persistence import (
     SecondaryPersistenceRepository,
     StoredConfiguration,
 )
+from .prompt import ContextOverflowPolicy, PromptAssembly, TokenBudget
 from .runtime import (
     InferenceRequest,
     LoadPolicy,
@@ -116,6 +138,7 @@ from .transcription import (
 
 __all__ = [
     "ChatInput",
+    "ChatImage",
     "ChatMessage",
     "ChatOptions",
     "ComputeDevice",
@@ -124,9 +147,17 @@ __all__ = [
     "DiagnosticSnapshot",
     "DiagnosticStatus",
     "Conversation",
+    "ConversationContextItem",
     "ConversationMemory",
     "ConversationMessage",
     "ConversationSummary",
+    "ConversationTitleOrigin",
+    "ContextKind",
+    "ContextInspection",
+    "ContextItemState",
+    "ContextOverflowPolicy",
+    "ContextSendPolicy",
+    "ContextStoragePolicy",
     "GpuTelemetry",
     "InferenceMetricsSink",
     "InferenceRequest",
@@ -167,6 +198,9 @@ __all__ = [
     "PersistenceOutboxEntry",
     "PersistenceRepository",
     "PersistenceState",
+    "PreparedContext",
+    "PreparedContextBatch",
+    "PromptAssembly",
     "PostgresConnectionProfile",
     "PostgresConnectionResult",
     "PostgresSslMode",
@@ -177,7 +211,9 @@ __all__ = [
     "MemoryCategory",
     "MemoryLocation",
     "MessageRole",
+    "MessageStatus",
     "ModelCatalog",
+    "ModelChatCapabilities",
     "ModelDescriptor",
     "ModelId",
     "ModelRuntime",
@@ -198,9 +234,13 @@ __all__ = [
     "RuntimeSetting",
     "RuntimeTelemetry",
     "SystemTelemetry",
+    "StructuredOutputMode",
+    "StructuredOutputSpec",
     "TelemetryContribution",
     "TelemetryProvider",
     "TelemetrySnapshot",
+    "ThinkingCapability",
+    "TokenBudget",
     "AudioRecorder",
     "TranscriptionEvent",
     "TranscriptionEventKind",

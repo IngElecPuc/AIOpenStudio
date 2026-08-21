@@ -20,6 +20,14 @@ class AppSettings(BaseSettings):
     environment: Literal["development", "test", "production"] = "development"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     ollama_base_url: AnyHttpUrl = "http://localhost:11434"  # type: ignore[assignment]
+    llm_context_dir: Path = Path("data/runtime/llm/context")
+    llm_max_text_context_bytes: int = Field(default=2 * 1024**2, ge=1024)
+    llm_max_total_context_bytes: int = Field(default=64 * 1024**2, ge=1024)
+    llm_max_image_context_bytes: int = Field(default=32 * 1024**2, ge=1024**2)
+    llm_max_image_context_pixels: int = Field(default=25_000_000, ge=1024**2)
+    llm_context_preview_characters: int = Field(default=4_000, ge=100, le=100_000)
+    llm_default_context_tokens: int = Field(default=4_096, ge=128)
+    llm_default_max_new_tokens: int = Field(default=512, ge=1)
     data_dir: Path = Path("data")
     manifests_dir: Path = Path("models")
     weights_dir: Path = Path("data/models")
@@ -75,6 +83,14 @@ class AppSettings(BaseSettings):
             raise ValueError("El límite blando de RAM debe ser menor que el límite duro.")
         if self.monitoring_vram_soft_limit >= self.monitoring_vram_hard_limit:
             raise ValueError("El límite blando de VRAM debe ser menor que el límite duro.")
+        if self.llm_max_text_context_bytes > self.llm_max_total_context_bytes:
+            raise ValueError(
+                "El límite individual de contexto LLM no puede superar el límite total."
+            )
+        if self.llm_max_image_context_bytes > self.llm_max_total_context_bytes:
+            raise ValueError(
+                "El límite individual de imagen LLM no puede superar el límite total."
+            )
         return self
 
     @staticmethod

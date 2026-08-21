@@ -41,9 +41,11 @@ from aiopenstudio.services import (
     DiagnosticsService,
     ImageGenerationService,
     ImageRunStore,
+    LLMContextService,
     LLMDictationService,
     LLMService,
     PersistenceService,
+    PromptAssembler,
     ResourceMonitorService,
     ShutdownStep,
     TranscriptionService,
@@ -149,6 +151,7 @@ def main() -> None:
         vram_soft_limit=settings.monitoring_vram_soft_limit,
         vram_hard_limit=settings.monitoring_vram_hard_limit,
     )
+    llm_context_root = resolve_path(settings.llm_context_dir)
     llm_service = LLMService(
         runtime=runtime,
         catalog=store,
@@ -156,6 +159,20 @@ def main() -> None:
         metrics_sink=monitor_service,
         residency_policy=monitor_service,
         execution_history=persistence_service,
+        context_service=LLMContextService(
+            store,
+            snapshot_root=llm_context_root / "snapshots",
+            prepared_root=llm_context_root / "prepared",
+            max_text_file_bytes=settings.llm_max_text_context_bytes,
+            max_total_bytes=settings.llm_max_total_context_bytes,
+            max_image_bytes=settings.llm_max_image_context_bytes,
+            max_image_pixels=settings.llm_max_image_context_pixels,
+            preview_characters=settings.llm_context_preview_characters,
+        ),
+        prompt_assembler=PromptAssembler(
+            default_context_tokens=settings.llm_default_context_tokens,
+            default_max_new_tokens=settings.llm_default_max_new_tokens,
+        ),
     )
     audio_recorder = SoundDeviceAudioRecorder()
     transcription_service = TranscriptionService(

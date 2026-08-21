@@ -239,9 +239,13 @@ y [configuración de Fooocus](https://github.com/lllyasviel/Fooocus/blob/v2.5.5/
 **Objetivo:** convertir la suite LLM en un espacio conversacional persistente, multimodal y
 configurable, sin acoplarla a Ollama ni enviar contexto externo sin una decisión visible.
 
-**Estado:** propuesta. Se aprovecharán primero las capacidades declaradas por los tags ya
-instalados; esta fase no autoriza descargas ni presume que todos los modelos admitan visión,
-thinking, herramientas o los mismos parámetros.
+**Estado:** implementación segura completa; validación real pendiente. El tab ya expone navegador
+persistente, cola textual/visual, snapshots consentidos, parámetros comunes, thinking condicionado,
+presupuesto, truncamiento, resúmenes versionados, Markdown nativo seguro y JSON/JSON Schema validado
+localmente. SQLite v3 conserva conversaciones y referencias; PostgreSQL no replica contenido. Las
+pruebas unitarias y la matriz optativa están implementadas, pero aún falta ejecutar con autorización
+la matriz real sobre un tag sólo-texto, uno con visión y uno con thinking ya instalados. La fase no
+autoriza descargas ni presume capacidades por familia.
 
 - Incorporar un navegador de conversaciones con título visible, búsqueda y acciones para crear,
   abrir, continuar, renombrar, archivar, exportar y eliminar con confirmación. El título podrá

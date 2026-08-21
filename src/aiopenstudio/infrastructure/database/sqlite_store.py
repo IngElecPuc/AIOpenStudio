@@ -15,6 +15,7 @@ from typing import Protocol, cast
 
 from aiopenstudio.core.contracts.memory import (
     Conversation,
+    ConversationContextItem,
     ConversationMessage,
     ConversationSummary,
     MemorySearchHit,
@@ -35,6 +36,7 @@ class SQLiteCapabilityError(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class SQLiteCapabilities:
     sqlite_version: str
+    schema_version: int
     fts5_available: bool
     extension_loading_available: bool
     vector_available: bool
@@ -67,15 +69,27 @@ ON model_references(runtime);
 CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
+    title_origin TEXT NOT NULL DEFAULT 'automatic',
+    archived_at TEXT,
+    last_model_key TEXT,
+    remember_context_queue INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_conversations_archive_updated
+ON conversations(archived_at, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS conversation_messages (
     id TEXT PRIMARY KEY,
     conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
     role TEXT NOT NULL,
     content TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'complete',
+    model_key TEXT,
+    operation_id TEXT,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
     created_at TEXT NOT NULL,
     metadata_json TEXT NOT NULL
 );
@@ -88,11 +102,38 @@ CREATE TABLE IF NOT EXISTS conversation_summaries (
     conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
     content TEXT NOT NULL,
     source_message_count INTEGER NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    first_message_id TEXT,
+    last_message_id TEXT,
+    model_key TEXT,
+    prompt_sha256 TEXT,
+    protected_facts_json TEXT NOT NULL DEFAULT '[]',
+    active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_summaries_conversation
 ON conversation_summaries(conversation_id, created_at);
+
+CREATE TABLE IF NOT EXISTS conversation_context_items (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    source_path TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    item_order INTEGER NOT NULL,
+    enabled INTEGER NOT NULL,
+    send_policy TEXT NOT NULL,
+    storage_policy TEXT NOT NULL,
+    snapshot_path TEXT,
+    size_bytes INTEGER NOT NULL,
+    sha256 TEXT NOT NULL,
+    source_modified_at TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_context_items_conversation
+ON conversation_context_items(conversation_id, item_order, created_at);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS conversation_search USING fts5(
     record_id UNINDEXED,
@@ -160,6 +201,33 @@ CREATE INDEX IF NOT EXISTS idx_persistence_outbox_created
 ON persistence_outbox(created_at, event_id);
 """
 
+_LATEST_SCHEMA_VERSION = 3
+
+_CONVERSATION_COLUMNS_V3 = {
+    "title_origin": "TEXT NOT NULL DEFAULT 'automatic'",
+    "archived_at": "TEXT",
+    "last_model_key": "TEXT",
+    "remember_context_queue": "INTEGER NOT NULL DEFAULT 0",
+}
+
+_MESSAGE_COLUMNS_V3 = {
+    "status": "TEXT NOT NULL DEFAULT 'complete'",
+    "model_key": "TEXT",
+    "operation_id": "TEXT",
+    "input_tokens": "INTEGER",
+    "output_tokens": "INTEGER",
+}
+
+_SUMMARY_COLUMNS_V3 = {
+    "version": "INTEGER NOT NULL DEFAULT 1",
+    "first_message_id": "TEXT",
+    "last_message_id": "TEXT",
+    "model_key": "TEXT",
+    "prompt_sha256": "TEXT",
+    "protected_facts_json": "TEXT NOT NULL DEFAULT '[]'",
+    "active": "INTEGER NOT NULL DEFAULT 1",
+}
+
 
 class SQLiteStore:
     """Persist local references and searchable conversation memory.
@@ -187,12 +255,30 @@ class SQLiteStore:
         with self._connection() as connection:
             if not self._has_fts5(connection):
                 raise SQLiteCapabilityError("The active SQLite library does not provide FTS5")
+            current_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+            if current_version > _LATEST_SCHEMA_VERSION:
+                raise SQLiteCapabilityError(
+                    "The local database was created by a newer AIOpenStudio version "
+                    f"(schema {current_version})."
+                )
+            self._migrate_to_v3(connection)
             connection.executescript(_SCHEMA_SQL)
-            connection.execute("PRAGMA user_version = 2")
+            if current_version < _LATEST_SCHEMA_VERSION:
+                connection.execute(
+                    "DELETE FROM conversation_search WHERE kind = 'conversation'"
+                )
+                connection.execute(
+                    """
+                    INSERT INTO conversation_search(record_id, conversation_id, kind, content)
+                    SELECT id, id, 'conversation', title FROM conversations
+                    """
+                )
+            connection.execute(f"PRAGMA user_version = {_LATEST_SCHEMA_VERSION}")
         return self.capabilities()
 
     def capabilities(self) -> SQLiteCapabilities:
         with self._connection(load_vectors=False) as connection:
+            schema_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
             fts5_available = self._has_fts5(connection)
             extension_loading = hasattr(connection, "enable_load_extension")
             vector_version: str | None = None
@@ -204,11 +290,39 @@ class SQLiteStore:
                 vector_version = None
         return SQLiteCapabilities(
             sqlite_version=sqlite3.sqlite_version,
+            schema_version=schema_version,
             fts5_available=fts5_available,
             extension_loading_available=extension_loading,
             vector_available=vector_version is not None,
             vector_version=vector_version,
         )
+
+    @classmethod
+    def _migrate_to_v3(cls, connection: sqlite3.Connection) -> None:
+        """Add conversation fields without assuming which older local schema is present."""
+        cls._add_columns(connection, "conversations", _CONVERSATION_COLUMNS_V3)
+        cls._add_columns(connection, "conversation_messages", _MESSAGE_COLUMNS_V3)
+        cls._add_columns(connection, "conversation_summaries", _SUMMARY_COLUMNS_V3)
+
+    @staticmethod
+    def _add_columns(
+        connection: sqlite3.Connection,
+        table: str,
+        columns: dict[str, str],
+    ) -> None:
+        table_exists = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table,),
+        ).fetchone()
+        if table_exists is None:
+            return
+        existing = {
+            str(row["name"])
+            for row in connection.execute(f'PRAGMA table_info("{table}")').fetchall()
+        }
+        for name, declaration in columns.items():
+            if name not in existing:
+                connection.execute(f'ALTER TABLE "{table}" ADD COLUMN "{name}" {declaration}')
 
     def create_vector_index(self, name: str, dimensions: int) -> None:
         """Create a vec0 index only after its embedding dimensions are known."""
@@ -289,18 +403,35 @@ class SQLiteStore:
         with self._connection() as connection:
             connection.execute(
                 """
-                INSERT INTO conversations(id, title, created_at, updated_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO conversations(
+                    id, title, title_origin, archived_at, last_model_key,
+                    remember_context_queue, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     title=excluded.title,
+                    title_origin=excluded.title_origin,
+                    archived_at=excluded.archived_at,
+                    last_model_key=excluded.last_model_key,
+                    remember_context_queue=excluded.remember_context_queue,
                     updated_at=excluded.updated_at
                 """,
                 (
                     conversation.id,
                     conversation.title,
+                    conversation.title_origin.value,
+                    conversation.archived_at.isoformat() if conversation.archived_at else None,
+                    conversation.last_model_key,
+                    int(conversation.remember_context_queue),
                     conversation.created_at.isoformat(),
                     conversation.updated_at.isoformat(),
                 ),
+            )
+            self._replace_search_record(
+                connection,
+                conversation.id,
+                conversation.id,
+                "conversation",
+                conversation.title,
             )
 
     def add_message(self, message: ConversationMessage) -> None:
@@ -308,14 +439,28 @@ class SQLiteStore:
             connection.execute(
                 """
                 INSERT INTO conversation_messages(
-                    id, conversation_id, role, content, created_at, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    id, conversation_id, role, content, status, model_key, operation_id,
+                    input_tokens, output_tokens, created_at, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    content=excluded.content,
+                    status=excluded.status,
+                    model_key=excluded.model_key,
+                    operation_id=excluded.operation_id,
+                    input_tokens=excluded.input_tokens,
+                    output_tokens=excluded.output_tokens,
+                    metadata_json=excluded.metadata_json
                 """,
                 (
                     message.id,
                     message.conversation_id,
                     message.role.value,
                     message.content,
+                    message.status.value,
+                    message.model_key,
+                    message.operation_id,
+                    message.input_tokens,
+                    message.output_tokens,
                     message.created_at.isoformat(),
                     json.dumps(message.metadata, ensure_ascii=False),
                 ),
@@ -336,19 +481,46 @@ class SQLiteStore:
             ).fetchone()
         return self._conversation_from_row(row) if row is not None else None
 
-    def list_conversations(self, limit: int = 100) -> Sequence[Conversation]:
+    def list_conversations(
+        self,
+        limit: int = 100,
+        *,
+        include_archived: bool = False,
+        query: str | None = None,
+    ) -> Sequence[Conversation]:
         if not 1 <= limit <= 500:
             raise ValueError("Conversation limit must be between 1 and 500")
+        clauses: list[str] = []
+        parameters: list[object] = []
+        if not include_archived:
+            clauses.append("archived_at IS NULL")
+        normalized_query = (query or "").strip()
+        if normalized_query:
+            clauses.append(
+                "id IN (SELECT conversation_id FROM conversation_search "
+                "WHERE conversation_search MATCH ?)"
+            )
+            parameters.append(f'"{normalized_query.replace(chr(34), chr(34) * 2)}"')
+        statement = "SELECT * FROM conversations"
+        if clauses:
+            statement += " WHERE " + " AND ".join(clauses)
+        statement += " ORDER BY updated_at DESC, id DESC LIMIT ?"
+        parameters.append(limit)
         with self._connection() as connection:
-            rows = connection.execute(
-                """
-                SELECT * FROM conversations
-                ORDER BY updated_at DESC, id DESC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
+            rows = connection.execute(statement, parameters).fetchall()
         return [self._conversation_from_row(row) for row in rows]
+
+    def delete_conversation(self, conversation_id: str) -> bool:
+        with self._connection() as connection:
+            connection.execute(
+                "DELETE FROM conversation_search WHERE conversation_id = ?",
+                (conversation_id,),
+            )
+            cursor = connection.execute(
+                "DELETE FROM conversations WHERE id = ?",
+                (conversation_id,),
+            )
+        return cursor.rowcount > 0
 
     def list_messages(self, conversation_id: str) -> Sequence[ConversationMessage]:
         with self._connection() as connection:
@@ -367,14 +539,33 @@ class SQLiteStore:
             connection.execute(
                 """
                 INSERT INTO conversation_summaries(
-                    id, conversation_id, content, source_message_count, created_at
-                ) VALUES (?, ?, ?, ?, ?)
+                    id, conversation_id, content, source_message_count, version,
+                    first_message_id, last_message_id, model_key, prompt_sha256,
+                    protected_facts_json, active, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    content=excluded.content,
+                    source_message_count=excluded.source_message_count,
+                    version=excluded.version,
+                    first_message_id=excluded.first_message_id,
+                    last_message_id=excluded.last_message_id,
+                    model_key=excluded.model_key,
+                    prompt_sha256=excluded.prompt_sha256,
+                    protected_facts_json=excluded.protected_facts_json,
+                    active=excluded.active
                 """,
                 (
                     summary.id,
                     summary.conversation_id,
                     summary.content,
                     summary.source_message_count,
+                    summary.version,
+                    summary.first_message_id,
+                    summary.last_message_id,
+                    summary.model_key,
+                    summary.prompt_sha256,
+                    json.dumps(summary.protected_facts, ensure_ascii=False),
+                    int(summary.active),
                     summary.created_at.isoformat(),
                 ),
             )
@@ -385,6 +576,78 @@ class SQLiteStore:
                 "summary",
                 summary.content,
             )
+
+    def list_summaries(self, conversation_id: str) -> Sequence[ConversationSummary]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM conversation_summaries
+                WHERE conversation_id = ?
+                ORDER BY version DESC, created_at DESC, id DESC
+                """,
+                (conversation_id,),
+            ).fetchall()
+        return [self._summary_from_row(row) for row in rows]
+
+    def save_context_item(self, item: ConversationContextItem) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO conversation_context_items(
+                    id, conversation_id, kind, source_path, display_name, item_order,
+                    enabled, send_policy, storage_policy, snapshot_path, size_bytes,
+                    sha256, source_modified_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    kind=excluded.kind,
+                    source_path=excluded.source_path,
+                    display_name=excluded.display_name,
+                    item_order=excluded.item_order,
+                    enabled=excluded.enabled,
+                    send_policy=excluded.send_policy,
+                    storage_policy=excluded.storage_policy,
+                    snapshot_path=excluded.snapshot_path,
+                    size_bytes=excluded.size_bytes,
+                    sha256=excluded.sha256,
+                    source_modified_at=excluded.source_modified_at
+                """,
+                (
+                    item.id,
+                    item.conversation_id,
+                    item.kind.value,
+                    str(item.source_path),
+                    item.display_name,
+                    item.order,
+                    int(item.enabled),
+                    item.send_policy.value,
+                    item.storage_policy.value,
+                    str(item.snapshot_path) if item.snapshot_path else None,
+                    item.size_bytes,
+                    item.sha256,
+                    item.source_modified_at.isoformat(),
+                    item.created_at.isoformat(),
+                ),
+            )
+
+    def list_context_items(self, conversation_id: str) -> Sequence[ConversationContextItem]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM conversation_context_items
+                WHERE conversation_id = ?
+                ORDER BY item_order, created_at, id
+                """,
+                (conversation_id,),
+            ).fetchall()
+        return [self._context_item_from_row(row) for row in rows]
+
+    def delete_context_item(self, item_id: str) -> bool:
+        with self._connection() as connection:
+            cursor = connection.execute(
+                "DELETE FROM conversation_context_items WHERE id = ?",
+                (item_id,),
+            )
+        return cursor.rowcount > 0
 
     def search(self, query: str, limit: int = 20) -> Sequence[MemorySearchHit]:
         normalized_query = query.strip()
@@ -789,6 +1052,10 @@ class SQLiteStore:
         return Conversation(
             id=row["id"],
             title=row["title"],
+            title_origin=row["title_origin"],
+            archived_at=row["archived_at"],
+            last_model_key=row["last_model_key"],
+            remember_context_queue=bool(row["remember_context_queue"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -800,6 +1067,47 @@ class SQLiteStore:
             conversation_id=row["conversation_id"],
             role=row["role"],
             content=row["content"],
+            status=row["status"],
+            model_key=row["model_key"],
+            operation_id=row["operation_id"],
+            input_tokens=row["input_tokens"],
+            output_tokens=row["output_tokens"],
             created_at=row["created_at"],
             metadata=json.loads(row["metadata_json"]),
+        )
+
+    @staticmethod
+    def _summary_from_row(row: sqlite3.Row) -> ConversationSummary:
+        return ConversationSummary(
+            id=row["id"],
+            conversation_id=row["conversation_id"],
+            content=row["content"],
+            source_message_count=row["source_message_count"],
+            version=row["version"],
+            first_message_id=row["first_message_id"],
+            last_message_id=row["last_message_id"],
+            model_key=row["model_key"],
+            prompt_sha256=row["prompt_sha256"],
+            protected_facts=tuple(json.loads(row["protected_facts_json"])),
+            active=bool(row["active"]),
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _context_item_from_row(row: sqlite3.Row) -> ConversationContextItem:
+        return ConversationContextItem(
+            id=row["id"],
+            conversation_id=row["conversation_id"],
+            kind=row["kind"],
+            source_path=Path(row["source_path"]),
+            display_name=row["display_name"],
+            order=row["item_order"],
+            enabled=bool(row["enabled"]),
+            send_policy=row["send_policy"],
+            storage_policy=row["storage_policy"],
+            snapshot_path=Path(row["snapshot_path"]) if row["snapshot_path"] else None,
+            size_bytes=row["size_bytes"],
+            sha256=row["sha256"],
+            source_modified_at=row["source_modified_at"],
+            created_at=row["created_at"],
         )
