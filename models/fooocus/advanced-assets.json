@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "policy": "Catalog only. Acquisition requires explicit approval; runtime downloads remain blocked.",
+  "artifacts": [
+    {
+      "relative_path": "upscale_models/fooocus_upscaler_s409985e5.bin",
+      "capabilities": ["upscale", "enhance"],
+      "source": "https://huggingface.co/lllyasviel/misc/resolve/main/fooocus_upscaler_s409985e5.bin",
+      "license": "Review lllyasviel/misc repository terms before acquisition",
+      "size_bytes": null,
+      "sha256": null
+    },
+    {
+      "relative_path": "inpaint/fooocus_inpaint_head.pth",
+      "capabilities": ["inpaint", "outpaint", "enhance"],
+      "source": "https://huggingface.co/lllyasviel/fooocus_inpaint/resolve/main/fooocus_inpaint_head.pth",
+      "license": "Review lllyasviel/fooocus_inpaint repository terms before acquisition",
+      "size_bytes": null,
+      "sha256": null
+    },
+    {
+      "relative_path": "inpaint/inpaint_v26.fooocus.patch",
+      "capabilities": ["inpaint", "outpaint", "enhance"],
+      "source": "https://huggingface.co/lllyasviel/fooocus_inpaint/resolve/main/inpaint_v26.fooocus.patch",
+      "license": "Review lllyasviel/fooocus_inpaint repository terms before acquisition",
+      "size_bytes": null,
+      "sha256": null
+    },
+    {
+      "relative_path": "inpaint/groundingdino_swint_ogc.pth",
+      "capabilities": ["enhance-detection"],
+      "source": "https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth",
+      "license": "Apache-2.0 code; review checkpoint terms before acquisition",
+      "size_bytes": null,
+      "sha256": null
+    },
+    {
+      "relative_path": "controlnet/control-lora-canny-rank128.safetensors",
+      "capabilities": ["pyra-canny"],
+      "source": "https://huggingface.co/lllyasviel/misc/resolve/main/control-lora-canny-rank128.safetensors",
+      "license": "Review lllyasviel/misc repository terms before acquisition",
+      "size_bytes": null,
+      "sha256": null
+    },
+    {
+      "relative_path": "controlnet/fooocus_xl_cpds_128.safetensors",
+      "capabilities": ["cpds"],
+      "source": "https://huggingface.co/lllyasviel/misc/resolve/main/fooocus_xl_cpds_128.safetensors",
+      "license": "Review lllyasviel/misc repository terms before acquisition",
+      "size_bytes": null,
+      "sha256": null
+    },
+    {
+      "relative_path": "clip_vision/clip_vision_vit_h.safetensors",
+      "capabilities": ["image-prompt", "face-swap"],
+      "source": "https://huggingface.co/lllyasviel/misc/resolve/main/clip_vision_vit_h.safetensors",
+      "license": "Review lllyasviel/misc repository terms before acquisition",
+      "size_bytes": null,
+      "sha256": null
+    },
+    {
+      "relative_path": "controlnet/fooocus_ip_negative.safetensors",
+      "capabilities": ["image-prompt", "face-swap"],
+      "source": "https://huggingface.co/lllyasviel/misc/resolve/main/fooocus_ip_negative.safetensors",
+      "license": "Review lllyasviel/misc repository terms before acquisition",
+      "size_bytes": null,
+      "sha256": null
+    },
+    {
+      "relative_path": "controlnet/ip-adapter-plus_sdxl_vit-h.bin",
+      "capabilities": ["image-prompt"],
+      "source": "https://huggingface.co/lllyasviel/misc/resolve/main/ip-adapter-plus_sdxl_vit-h.bin",
+      "license": "Review lllyasviel/misc and IP-Adapter model terms before acquisition",
+      "size_bytes": null,
+      "sha256": null
+    },
+    {
+      "relative_path": "controlnet/ip-adapter-plus-face_sdxl_vit-h.bin",
+      "capabilities": ["face-swap"],
+      "source": "https://huggingface.co/lllyasviel/misc/resolve/main/ip-adapter-plus-face_sdxl_vit-h.bin",
+      "license": "Review lllyasviel/misc and IP-Adapter model terms before acquisition",
+      "size_bytes": null,
+      "sha256": null
+    },
+    {
+      "relative_path": "clip_vision/model_base_caption_capfilt_large.pth",
+      "capabilities": ["describe-photograph"],
+      "source": "https://huggingface.co/lllyasviel/misc/resolve/main/model_base_caption_capfilt_large.pth",
+      "license": "Review lllyasviel/misc and BLIP checkpoint terms before acquisition",
+      "size_bytes": null,
+      "sha256": null
+    },
+    {
+      "relative_path": "clip_vision/wd-v1-4-moat-tagger-v2.onnx",
+      "capabilities": ["describe-art-anime"],
+      "source": "https://huggingface.co/lllyasviel/misc/resolve/main/wd-v1-4-moat-tagger-v2.onnx",
+      "license": "Review lllyasviel/misc and WD 1.4 tagger terms before acquisition",
+      "size_bytes": null,
+      "sha256": null
+    },
+    {
+      "relative_path": "clip_vision/wd-v1-4-moat-tagger-v2.csv",
+      "capabilities": ["describe-art-anime"],
+      "source": "https://huggingface.co/lllyasviel/misc/resolve/main/wd-v1-4-moat-tagger-v2.csv",
+      "license": "Review lllyasviel/misc and WD 1.4 tagger terms before acquisition",
+      "size_bytes": null,
+      "sha256": null
+    },
+    {
+      "relative_path": "sam/sam_vit_b_01ec64.pth",
+      "capabilities": ["enhance-sam-vit-b"],
+      "source": "https://huggingface.co/mashb1t/misc/resolve/main/sam_vit_b_01ec64.pth",
+      "license": "Review mashb1t/misc and Segment Anything checkpoint terms before acquisition",
+      "size_bytes": null,
+      "sha256": null
+    },
+    {
+      "relative_path": "sam/sam_vit_l_0b3195.pth",
+      "capabilities": ["enhance-sam-vit-l"],
+      "source": "https://huggingface.co/mashb1t/misc/resolve/main/sam_vit_l_0b3195.pth",
+      "license": "Review mashb1t/misc and Segment Anything checkpoint terms before acquisition",
+      "size_bytes": null,
+      "sha256": null
+    },
+    {
+      "relative_path": "sam/sam_vit_h_4b8939.pth",
+      "capabilities": ["enhance-sam-vit-h"],
+      "source": "https://huggingface.co/mashb1t/misc/resolve/main/sam_vit_h_4b8939.pth",
+      "license": "Review mashb1t/misc and Segment Anything checkpoint terms before acquisition",
+      "size_bytes": null,
+      "sha256": null
+    },
+    {
+      "relative_path": "rembg/u2net.onnx",
+      "capabilities": ["enhance-u2net"],
+      "source": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net.onnx",
+      "license": "Review rembg release and U2-Net checkpoint terms before acquisition",
+      "size_bytes": null,
+      "sha256": null
+    },
+    {
+      "relative_path": "rembg/u2netp.onnx",
+      "capabilities": ["enhance-u2netp"],
+      "source": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx",
+      "license": "Review rembg release and U2-Net checkpoint terms before acquisition",
+      "size_bytes": null,
+      "sha256": null
+    },
+    {
+      "relative_path": "rembg/u2net_human_seg.onnx",
+      "capabilities": ["enhance-u2net-human"],
+      "source": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net_human_seg.onnx",
+      "license": "Review rembg release and U2-Net checkpoint terms before acquisition",
+      "size_bytes": null,
+      "sha256": null
+    },
+    {
+      "relative_path": "rembg/u2net_cloth_seg.onnx",
+      "capabilities": ["enhance-u2net-cloth"],
+      "source": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net_cloth_seg.onnx",
+      "license": "Review rembg release and U2-Net checkpoint terms before acquisition",
+      "size_bytes": null,
+      "sha256": null
+    },
+    {
+      "relative_path": "rembg/silueta.onnx",
+      "capabilities": ["enhance-silueta"],
+      "source": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/silueta.onnx",
+      "license": "Review rembg release and Silueta checkpoint terms before acquisition",
+      "size_bytes": null,
+      "sha256": null
+    },
+    {
+      "relative_path": "rembg/isnet-general-use.onnx",
+      "capabilities": ["enhance-isnet-general"],
+      "source": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx",
+      "license": "Review rembg release and IS-Net checkpoint terms before acquisition",
+      "size_bytes": null,
+      "sha256": null
+    },
+    {
+      "relative_path": "rembg/isnet-anime.onnx",
+      "capabilities": ["enhance-isnet-anime"],
+      "source": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-anime.onnx",
+      "license": "Review rembg release and IS-Net checkpoint terms before acquisition",
+      "size_bytes": null,
+      "sha256": null
+    }
+  ]
+}

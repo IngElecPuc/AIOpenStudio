@@ -46,6 +46,7 @@ class AppSettings(BaseSettings):
     fooocus_restart_limit: int = Field(default=3, ge=0, le=20)
     fooocus_restart_window_seconds: float = Field(default=300.0, ge=10, le=3_600)
     fooocus_max_image_bytes: int = Field(default=256 * 1024**2, ge=1024**2)
+    fooocus_max_input_pixels: int = Field(default=40_000_000, ge=1024**2, le=200_000_000)
     embedding_models_dir: Path = Path("embeddings")
     model_manifests_dir: Path = Path("manifests")
     model_cache_dir: Path = Path("cache")

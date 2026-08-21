@@ -174,9 +174,13 @@ Windows limpio y el futuro activador de updates/rollback.
 **Objetivo:** exponer de forma segura y completa las funciones de Fooocus v2.5.5 basadas en
 imágenes de referencia y cerrar las validaciones reales pendientes de la suite.
 
-**Estado:** propuesta. La integración actual continúa limitada a texto-a-imagen; esta fase no
-autoriza instalaciones ni descargas. Cada activo adicional debe inventariarse por origen, licencia,
-tamaño y hash, y requiere aprobación explícita antes de incorporarse.
+**Estado:** implementación segura en progreso desde el 21 de agosto de 2026. Ya existen contratos
+neutrales, staging y normalización de entradas, descubrimiento del esquema Gradio, adaptadores para
+las operaciones enumeradas, cola/visor de referencias, controles Enhance/Describe y galería con
+memoria optativa. Las pruebas locales no usan GPU ni descargan activos. Continúan bloqueadas hasta
+autorización la adquisición de activos auxiliares, la matriz real completa, los intercambios con
+LLM/Whisper y el OOM deliberado. Cada activo adicional debe inventariarse por origen, licencia,
+tamaño y hash antes de incorporarse.
 
 - Diseñar contratos neutrales que tipen imágenes fuente, máscaras, modo de transformación,
   intensidad, regiones, controles y resultados sin filtrar componentes ni tipos de Gradio hacia
@@ -187,12 +191,25 @@ tamaño y hash, y requiere aprobación explícita antes de incorporarse.
 - Incorporar variaciones sutiles y fuertes, upscale 1,5x/2x, inpaint, outpaint, `Image Prompt`,
   `PyraCanny`, `CPDS`, `FaceSwap`, `Describe` y `Enhance`, incluida la combinación de varias
   referencias y los parámetros que Fooocus admita para cada modo.
+- Añadir una cola de imágenes de contexto con agregar, quitar, reordenar, habilitar/deshabilitar y
+  previsualizar. Descubrir dinámicamente el número de ranuras de `Image Prompt` —Fooocus v2.5.5
+  configura cuatro por defecto— y no confundirlas con los modos que sólo aceptan una fuente o una
+  combinación fuente/máscara.
+- Aceptar inicialmente `.png`, `.jpg`, `.jpeg` y `.bmp` en AIOpenStudio, validar el contenido real y
+  normalizar de forma segura a RGB/RGBA antes de entregarlo a Fooocus. Someter `.webp`, `.tif`,
+  `.tiff` y `.gif` a una prueba explícita contra el transporte fijado antes de habilitarlos; rechazar
+  archivos animados/multipágina, imágenes desproporcionadas y contenido activo como SVG.
 - Descubrir y validar el esquema Gradio real detrás del adaptador; mantener la UI independiente de
   índices, etiquetas y detalles del transporte, y fallar de forma localizada si una capacidad no
   está disponible en la versión instalada.
 - Extender el tab con selección y previsualización de fuentes/máscaras, controles condicionados por
   capacidad, edición clara de outpaint y regiones, cola, progreso, cancelación, galería y mensajes
   de preflight accionables.
+- Incorporar un visor que distinga referencias, máscaras y resultados, con miniaturas, vista
+  ampliada y navegación anterior/siguiente por la galería de la sesión. La galería será transitoria
+  por defecto; una opción explícita permitirá recordar sólo su índice y metadatos entre reinicios,
+  sin duplicar binarios. «Olvidar galería» no borrará outputs: la eliminación de archivos será una
+  acción separada, confirmada y auditable.
 - Catalogar antes de usarlos los activos auxiliares requeridos —en particular los de inpaint— y
   bloquear cualquier descarga o actualización implícita durante preflight, arranque y generación.
 - Preservar la exclusión GPU, la suspensión/restauración de LLM y Whisper, el proceso supervisado,
@@ -202,6 +219,9 @@ tamaño y hash, y requiere aprobación explícita antes de incorporarse.
   mantener las pruebas de hardware explícitas y omitibles.
 - Completar una matriz manual con al menos un run real por capacidad y verificar calidad funcional,
   metadatos, progreso, cancelación, recuperación de recursos y ausencia de descargas inesperadas.
+- Validar por separado una y varias referencias, formatos permitidos/rechazados, cambio de orden y
+  habilitación, reapertura o no de la galería según su política y comportamiento con entradas
+  borradas o modificadas desde fuera de la aplicación.
 - Cerrar además los pendientes de la fase 6: intercambio real con un LLM residente y activo,
   intercambio real con Whisper, recorrido completo del tab —incluidas dos tareas FIFO y
   cancelaciones activa/en cola— y recuperación después de un OOM deliberado autorizado.
@@ -209,6 +229,123 @@ tamaño y hash, y requiere aprobación explícita antes de incorporarse.
 **Salida:** suite Fooocus con todas las capacidades avanzadas enumeradas disponibles mediante
 contratos desacoplados y UI propia, con matriz de validación segura/real documentada y recuperación
 comprobada ante cancelación, conflicto de GPU, fallo del proceso y OOM.
+
+**Fuentes de diseño:** [Fooocus v2.5.5: capacidades y parámetros](https://github.com/lllyasviel/Fooocus/blob/v2.5.5/modules/flags.py),
+[UI y ranuras de imágenes de referencia](https://github.com/lllyasviel/Fooocus/blob/v2.5.5/webui.py)
+y [configuración de Fooocus](https://github.com/lllyasviel/Fooocus/blob/v2.5.5/modules/config.py).
+
+## Fase 10 — Conversaciones, contexto y controles LLM
+
+**Objetivo:** convertir la suite LLM en un espacio conversacional persistente, multimodal y
+configurable, sin acoplarla a Ollama ni enviar contexto externo sin una decisión visible.
+
+**Estado:** propuesta. Se aprovecharán primero las capacidades declaradas por los tags ya
+instalados; esta fase no autoriza descargas ni presume que todos los modelos admitan visión,
+thinking, herramientas o los mismos parámetros.
+
+- Incorporar un navegador de conversaciones con título visible, búsqueda y acciones para crear,
+  abrir, continuar, renombrar, archivar, exportar y eliminar con confirmación. El título podrá
+  derivarse localmente del primer mensaje y siempre será editable; se mostrará inequívocamente la
+  conversación activa y se advertirá al cambiar de modelo dentro de ella.
+- Garantizar reapertura y continuidad entre reinicios sobre el repositorio de conversaciones. El
+  contenido seguirá siendo local por defecto; cualquier réplica PostgreSQL de mensajes o adjuntos
+  requerirá una política de privacidad independiente y explícita.
+- Crear una cola de contexto externo con agregar, quitar, reordenar, previsualizar y un checkbox por
+  elemento. Cada entrada tendrá política de envío `una vez` o `en cada turno`; la cola y sus checks
+  serán efímeros por defecto y sólo se recordarán por conversación mediante una opción explícita.
+- Admitir como texto `.txt`, `.json`, `.yaml`, `.yml`, `.md`, `.py`, `.c`, `.cpp`, `.h`, `.hpp`,
+  `.js`, `.ts`, `.tsx`, `.html`, `.css` y `.sql`. Leerlos como UTF-8/UTF-8 BOM, detectar binarios,
+  limitar tamaño individual y total, no ejecutar su contenido y delimitarlo como datos externos
+  potencialmente no confiables para reducir inyección de instrucciones.
+- Registrar tamaño, hash y fecha de modificación de los adjuntos; avisar si el archivo cambió o ya
+  no existe. Persistir sólo referencias por defecto y ofrecer una copia/snapshot reproducible
+  únicamente con consentimiento, sin incorporar archivos del usuario al repositorio del proyecto.
+- Añadir imágenes de contexto con miniatura cuando el tag anuncie `vision` mediante `/api/show`.
+  Validarlas y normalizarlas localmente, permitir varias sólo si la capacidad real lo admite y no
+  ofrecer visión por nombre de familia: Gemma 3 tiene variantes sólo-texto y multimodales, mientras
+  que el tag concreto de Gemma 4 también debe comprobarse.
+- Exponer ajustes comunes con restauración a los valores del modelo: temperatura, `top_p`, `top_k`,
+  `min_p`, semilla, ventana de contexto, máximo de tokens nuevos, penalización de repetición,
+  secuencias de parada y prompt de sistema. Separar controles comunes de ajustes avanzados propios
+  del backend y advertir el impacto de `num_ctx` sobre RAM/VRAM.
+- Modelar thinking como capacidad: no disponible, booleano o niveles. Ofrecer respuesta final
+  directa mediante `think=false` cuando el tag realmente lo soporte y, por separado, ocultar o
+  mostrar la traza cuando no pueda desactivarse. Separar `thinking` de `content` durante streaming y
+  no persistir ni reinyectar trazas de razonamiento por defecto.
+- Incorporar presupuestos y conteo de tokens, truncamiento controlado y compactación mediante
+  resúmenes versionados antes de exceder la ventana. Conservar el historial íntegro y permitir
+  inspeccionar, regenerar o descartar el resumen; nunca perder instrucciones del sistema,
+  decisiones confirmadas, restricciones ni hechos pendientes de validación.
+- Definir una política visible para respuestas parciales canceladas y cambios de modelo. Evaluar
+  reutilización de prefijos o caché KV sólo en runtimes que la declaren, con aislamiento entre
+  conversaciones, invalidación y métricas de latencia, tokens y memoria.
+- Renderizar Markdown de forma segura con alternativa de texto plano, enlaces controlados, bloques
+  de código copiables y buen rendimiento durante streaming. Ofrecer salida estructurada JSON/JSON
+  Schema sólo cuando el runtime lo admita y validarla con Pydantic.
+- Mantener herramientas deshabilitadas por defecto. Si se incorporan, usar contratos neutrales,
+  lista permitida y confirmación de acciones; la búsqueda web de Ollama Cloud queda fuera del
+  alcance local inicial por requerir red, cuenta y credenciales.
+- Probar persistencia y borrado, adjuntos modificados/ausentes, límites y prompt injection,
+  presupuestos largos, cancelación, cambio de modelo y concurrencia. Ejecutar una matriz real con
+  al menos un tag sólo-texto, uno con visión y uno con thinking, sin descargar modelos para la
+  prueba, y documentar capacidades solicitadas frente a las aplicadas.
+
+**Salida:** suite LLM con navegador de conversaciones, contexto externo seleccionable,
+multimodalidad condicionada por capacidades, controles de generación y razonamiento verificables,
+presupuestos de contexto y continuidad local entre reinicios.
+
+**Fuentes de diseño:** [API de chat de Ollama](https://docs.ollama.com/api/chat),
+[thinking](https://docs.ollama.com/capabilities/thinking),
+[visión](https://docs.ollama.com/capabilities/vision),
+[inspección de capacidades del modelo](https://docs.ollama.com/api-reference/show-model-details),
+[parámetros de Modelfile](https://docs.ollama.com/modelfile),
+[Gemma 3](https://ollama.com/library/gemma3) y [Gemma 4](https://ollama.com/library/gemma4).
+
+## Fase 11 — Transcripción y traducción avanzadas con Whisper
+
+**Objetivo:** exponer las capacidades útiles de faster-whisper/Whisper que aún no están disponibles
+en la suite, con controles comprensibles, exportación reproducible y límites claros del backend.
+
+**Estado:** propuesta. La versión fijada es faster-whisper 1.2.1. No se instalarán modelos ni
+dependencias adicionales; cada control se descubrirá o adaptará tras el contrato común.
+
+- Añadir detección automática de idioma con probabilidad visible y selección manual. Permitir
+  `transcribe` y traducción nativa a inglés, avisando que Whisper no traduce directamente a otros
+  idiomas y que `turbo` no es el modelo recomendado para traducción.
+- Exponer timestamps por palabra y puntuación/confianza cuando estén disponibles, además de la
+  segmentación actual. Añadir tabla navegable por segmentos/palabras, búsqueda y corrección no
+  destructiva antes de exportar.
+- Incorporar VAD Silero con modo desactivado, automático y presets comprensibles, más controles
+  avanzados para silencio cuando proceda. Mostrar cuánto audio fue descartado y conservar los
+  parámetros exactos junto al resultado.
+- Añadir prompt inicial, prefijo y glosario/hotwords para nombres propios o vocabulario técnico,
+  diferenciando qué opciones son incompatibles con la inferencia por lotes fijada.
+- Exponer en un panel avanzado `beam_size`, `best_of`, `patience`, temperaturas de fallback,
+  umbrales de no-habla/logprob/compresión, condicionamiento con texto previo, puntuación incluida y
+  detección de silencios alucinados, con presets seguros y restauración a valores del backend.
+- Permitir seleccionar uno o varios intervalos de tiempo y procesar una cola de audios. Usar
+  ejecución secuencial por defecto; habilitar `BatchedInferencePipeline` sólo después de medir RAM,
+  VRAM, cancelación y diferencias de resultado frente al pipeline actual.
+- Ampliar exportación con TSV/CSV y JSON detallado que conserve idioma/probabilidad, modelo,
+  dispositivo, opciones, segmentos, palabras y métricas. Regenerar TXT/SRT/VTT desde las
+  correcciones sin perder el resultado original.
+- Evaluar una vista de dictado por fragmentos con solapamiento y deduplicación como función
+  experimental; no presentarla como streaming nativo ni prometer latencia estable, porque
+  Whisper/faster-whisper procesan ventanas de audio.
+- Mantener diarización e identificación de hablantes fuera del alcance nativo: sólo podrá abrirse
+  como integración futura con otro backend, licencia, modelos y presupuesto de memoria revisados y
+  autorizados por separado.
+- Cerrar los pendientes reales de la fase 5 —GPU, micrófono, cancelación, cambio a `medium` y OOM
+  autorizado— y añadir pruebas de traducción español→inglés, timestamps por palabra, VAD,
+  hotwords, intervalos, audio largo, cola/batch, exportaciones y recuperación tras fallo.
+
+**Salida:** suite Whisper con idioma y traducción controlables, detalle por palabra, VAD, glosarios,
+decodificación avanzada, cola/intervalos y exportaciones editables, con límites de streaming y
+diarización documentados y matriz real de validación.
+
+**Fuentes de diseño:** [Whisper oficial](https://github.com/openai/whisper/blob/main/README.md),
+[faster-whisper 1.2.1](https://github.com/SYSTRAN/faster-whisper/blob/v1.2.1/README.md) y
+[parámetros de transcripción fijados](https://github.com/SYSTRAN/faster-whisper/blob/v1.2.1/faster_whisper/transcribe.py).
 
 ## Criterios transversales
 
@@ -218,66 +355,3 @@ comprobada ante cancelación, conflicto de GPU, fallo del proceso y OOM.
 - Los contratos no exponen tipos de SDKs externos.
 - Los tests con GPU, Ollama, Fooocus, Whisper o PostgreSQL son explícitos y se pueden omitir.
 - No se crea ningún commit sin autorización del usuario.
-
-## Deuda técnica registrada
-
-### Control de razonamiento de los LLM
-
-- Incorporar al catálogo de runtime una capacidad de thinking por modelo y tag que distinga entre
-  no compatible, control booleano (`false/true`) y niveles graduados (`low`, `medium`, `high`,
-  `max`), sin ofrecer valores que el backend reduzca internamente a un simple booleano.
-- Consultar las capacidades reportadas por la versión local de Ollama y mantener el catálogo
-  documentado como fallback; validar cada tag mediante una inferencia acotada, sin descargas
-  implícitas.
-- Extender el contrato común, los servicios y la UI para seleccionar el máximo nivel admitido,
-  transmitir `think` a Ollama y separar el contenido de razonamiento de la respuesta final durante
-  el streaming. No persistir trazas privadas de razonamiento por defecto.
-- Registrar junto a cada ejecución el ajuste solicitado, el aplicado por el runtime, tokens,
-  latencia y consumo de memoria para poder comparar el costo real de cada nivel.
-
-### Gestión conversacional de la suite LLM
-
-- Incorporar un navegador de conversaciones persistidas con acciones para abrir, continuar,
-  renombrar, archivar y eliminar de forma explícita.
-- Implementar borrado seguro de conversaciones, con confirmación, eliminación en cascada de
-  mensajes, resúmenes e índices de búsqueda, y una opción clara para cancelar la acción.
-- Permitir editar el título. Actualmente se crea como `Nueva conversación` y se reemplaza
-  automáticamente por los primeros 60 caracteres de la primera pregunta.
-- Exponer en la UI los parámetros que ya admite el contrato: temperatura, `top_p`, `top_k`, semilla,
-  longitud de contexto, máximo de tokens nuevos y secuencias de parada.
-- Mostrar claramente qué conversación está activa y advertir cuando se cambia de modelo dentro de
-  ella, porque el nuevo modelo recibe el mismo historial.
-- Implementar presupuestos de contexto, conteo de tokens, truncamiento controlado y compresión con
-  resúmenes antes de alcanzar la ventana máxima del modelo.
-- Definir una política visible para respuestas parciales canceladas: conservarlas en el contexto,
-  excluirlas del siguiente turno o permitir que el usuario decida.
-- Añadir pruebas de reapertura y continuidad entre reinicios, cambio de modelo, historiales extensos
-  y concurrencia entre lectura externa y escritura desde AIOpenStudio.
-
-### Configuración y presentación de la interfaz
-
-- Añadir un menú desplegable superior que permita acceder a parámetros y controles de cada suite y
-  del modelo activo sin acoplar la UI a un runtime específico.
-- Separar ajustes comunes de generación, ajustes propios del backend y configuración general de la
-  suite, mostrando sólo controles compatibles con sus capacidades declaradas.
-- Incorporar interpretación y renderizado seguro de Markdown en las respuestas: encabezados,
-  énfasis, listas, citas, enlaces y bloques de código, conservando una alternativa de texto plano.
-- Definir reglas para enlaces, contenido potencialmente peligroso, copiado de código, selección de
-  texto y rendimiento con respuestas extensas o recibidas por streaming.
-
-### Eficiencia del contexto LLM
-
-- Evaluar e implementar prompt caching o reutilización de prefijos y caché KV en los runtimes que
-  lo soporten, sin asumir que todos los backends exponen las mismas capacidades.
-- Definir claves, invalidación, aislamiento entre conversaciones, límites de memoria y tratamiento
-  de contenido privado para evitar reutilizar contexto incorrecto o filtrarlo entre sesiones.
-- Incorporar métricas de aciertos de caché, tokens reutilizados, latencia al primer token, memoria
-  consumida y ahorro efectivo antes de habilitar políticas automáticas.
-- Implementar compactación conversacional basada en presupuestos de tokens, con resúmenes
-  versionados y trazabilidad hacia los mensajes originales; el historial íntegro debe conservarse.
-- Establecer qué información nunca puede perderse al compactar: instrucciones del sistema,
-  decisiones confirmadas, restricciones, herramientas utilizadas y hechos pendientes de validar.
-- Permitir regenerar, inspeccionar y descartar una compactación, además de elegir entre historial
-  completo, resumen más mensajes recientes o una conversación nueva.
-- Añadir evaluaciones de fidelidad y regresión para comprobar que caching y compactación mejoran
-  coste y velocidad sin degradar respuestas, continuidad, privacidad ni comportamiento del modelo.

@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator, Sequence
 
 from aiopenstudio.core.contracts import (
     ComputeDevice,
+    ImageGenerationCapabilities,
     ImageGenerationEvent,
     ImageGenerationEventKind,
     ImageGenerationRequest,
@@ -75,6 +76,12 @@ class FooocusRuntime(ImageGenerationRuntime):
     def preflight(self) -> tuple[str, ...]:
         return self._supervisor.preflight() + self._transport.preflight()
 
+    def preflight_for(self, request: ImageGenerationRequest) -> tuple[str, ...]:
+        return self.preflight() + self._supervisor.preflight_for(request)
+
+    def advanced_asset_inventory(self) -> tuple[dict[str, object], ...]:
+        return self._supervisor.advanced_asset_inventory()
+
     async def health(self) -> RuntimeHealth:
         if self.preflight():
             return RuntimeHealth.UNAVAILABLE
@@ -90,8 +97,7 @@ class FooocusRuntime(ImageGenerationRuntime):
     async def start(self) -> ProcessState:
         await self._supervisor.start()
         deadline = (
-            asyncio.get_running_loop().time()
-            + self._supervisor.settings.startup_timeout_seconds
+            asyncio.get_running_loop().time() + self._supervisor.settings.startup_timeout_seconds
         )
         while asyncio.get_running_loop().time() < deadline:
             if not self._supervisor.running:
@@ -141,6 +147,9 @@ class FooocusRuntime(ImageGenerationRuntime):
         styles = tuple(await self._transport.list_styles())
         return styles or ("Fooocus V2",)
 
+    async def image_capabilities(self) -> ImageGenerationCapabilities:
+        return await self._transport.image_capabilities()
+
     async def load(self, model: ModelId, policy: LoadPolicy) -> ModelState:
         descriptor = await self._descriptor(model)
         if descriptor is None:
@@ -157,9 +166,7 @@ class FooocusRuntime(ImageGenerationRuntime):
         self._load_policy = policy
         return await self.state(model)
 
-    async def unload(
-        self, model: ModelId, target: UnloadTarget = UnloadTarget.ALL
-    ) -> ModelState:
+    async def unload(self, model: ModelId, target: UnloadTarget = UnloadTarget.ALL) -> ModelState:
         del target
         if self._active_operation is not None:
             raise RuntimeRequestError("Cancela la generación antes de liberar Fooocus.")
@@ -180,9 +187,7 @@ class FooocusRuntime(ImageGenerationRuntime):
             gpu_residency=ResidencyState.LOADED if loaded else ResidencyState.UNLOADED,
             active_device=ComputeDevice.GPU if loaded else None,
             pinned_in_ram=bool(self._load_policy and self._load_policy.pin_in_ram and loaded),
-            pinned_on_device=bool(
-                self._load_policy and self._load_policy.pin_on_device and loaded
-            ),
+            pinned_on_device=bool(self._load_policy and self._load_policy.pin_on_device and loaded),
             detail=(
                 "Proceso Fooocus administrado; uso físico de VRAM medido por NVML."
                 if loaded
@@ -206,9 +211,7 @@ class FooocusRuntime(ImageGenerationRuntime):
         cancelled_emitted = False
         try:
             while next_event is not None:
-                done, _ = await asyncio.wait(
-                    {next_event}, timeout=self._worker_watchdog_seconds
-                )
+                done, _ = await asyncio.wait({next_event}, timeout=self._worker_watchdog_seconds)
                 if not done:
                     failure = self._worker_failure_detail(self.recent_logs[log_offset:])
                     if failure is not None:

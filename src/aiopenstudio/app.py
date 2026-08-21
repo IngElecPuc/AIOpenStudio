@@ -188,6 +188,7 @@ def main() -> None:
                 fooocus_runtime_root / "gradio",
             ),
             max_image_bytes=settings.fooocus_max_image_bytes,
+            max_input_pixels=settings.fooocus_max_input_pixels,
         ),
         device_leases=device_leases,
         residency_policy=monitor_service,

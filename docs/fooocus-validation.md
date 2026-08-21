@@ -115,6 +115,33 @@ if ($LASTEXITCODE -ne 0) { throw "Fooocus todavía no está listo para smoke" }
 Si se invoca un run con requisitos faltantes, el validador crea únicamente un JSON con estado
 `preflight_failed`; no encola trabajo, no crea el directorio de imágenes y no toma la GPU.
 
+## Capacidades avanzadas: validación segura
+
+El 21 de agosto de 2026 se contrastó el adaptador con la copia local del esquema Gradio v2.5.5,
+sin iniciar una generación. El esquema identificó las once operaciones soportadas por el contrato,
+cuatro tipos de referencia, cuatro ranuras Image Prompt y tres etapas Enhance. Las solicitudes
+sintéticas de generación produjeron 152 argumentos por operación (sin contar el estado Gradio) y
+Describe produjo tres, resueltos por identidad y orden de componentes en vez de índices expuestos a
+la UI.
+
+La batería segura terminó con `101 passed, 3 skipped`; `ruff check .` y `mypy src` terminaron sin
+errores. Cubre validación de contratos, PNG/JPEG/BMP, rechazo de WEBP de entrada, normalización y
+hashes, aislamiento de archivos, memoria/olvido de galería, descubrimiento de capacidades, mapeo
+de argumentos y bloqueo previo de activos faltantes. Los siete modelos REMBG de máscara Enhance
+están catalogados junto con SAM; `U2NET_HOME` se fija dentro de la biblioteca compartida. Si falta
+el ONNX elegido, el preflight falla de forma localizada antes de que upstream pueda descargarlo en
+el perfil del usuario.
+
+El inventario versionado está en `models/fooocus/advanced-assets.json`. Sus tamaños y hashes
+permanecen pendientes mientras los archivos no hayan sido adquiridos con autorización; el comando
+`preflight` informa los valores reales de cualquier activo ya presente sin modificarlo.
+
+El preflight local del 21 de agosto terminó con código cero y `schema_source: cached`: confirmó las
+once operaciones, cuatro tipos/cuatro ranuras de referencia y tres etapas Enhance. Los 23 activos
+avanzados catalogados resultaron ausentes (`size_bytes` y `sha256` nulos) y
+`downloads_performed: false`. `health: ready` describe la vertical base; cada operación avanzada
+que necesite uno de esos activos seguirá bloqueada por su propio preflight.
+
 ## Runs reales delegados
 
 Sustituir el nombre por uno listado en el preflight:

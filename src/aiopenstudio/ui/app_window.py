@@ -54,8 +54,8 @@ class ApplicationWindow:
         self._persistence_mode = tk.StringVar(value=PersistenceMode.SQLITE_REPLICATED.value)
         self._callbacks: SimpleQueue[Callable[[], None]] = SimpleQueue()
         root.title("AIOpenStudio")
-        root.geometry("1050x720")
-        root.minsize(800, 560)
+        root.geometry("1280x800")
+        root.minsize(1000, 650)
         self._build_menu()
 
         self._notebook = ttk.Notebook(root)

@@ -171,6 +171,8 @@ async def _preflight(settings: AppSettings) -> int:
             {"name": item.id.name, "path": str(item.weights_path), "bytes": item.size_bytes}
             for item in models
         ],
+        "advanced_capabilities": (await runtime.image_capabilities()).model_dump(mode="json"),
+        "advanced_assets": runtime.advanced_asset_inventory(),
         "downloads_performed": False,
     }
     print("No se inicia Fooocus ni se genera reporte.")

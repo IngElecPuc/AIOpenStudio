@@ -10,10 +10,13 @@ from PIL import Image
 
 from aiopenstudio.core.contracts import (
     ComputeDevice,
+    ImageGenerationCapabilities,
     ImageGenerationEvent,
     ImageGenerationEventKind,
     ImageGenerationOptions,
     ImageGenerationRequest,
+    ImageOperation,
+    ImagePromptReference,
     LoadPolicy,
     ModelDescriptor,
     ModelId,
@@ -80,6 +83,13 @@ class FakeImageRuntime:
     def preflight(self) -> tuple[str, ...]:
         return ()
 
+    def preflight_for(self, request: ImageGenerationRequest) -> tuple[str, ...]:
+        del request
+        return ()
+
+    async def image_capabilities(self) -> ImageGenerationCapabilities:
+        return ImageGenerationCapabilities()
+
     async def health(self) -> RuntimeHealth:
         return RuntimeHealth.READY
 
@@ -104,9 +114,7 @@ class FakeImageRuntime:
         self.loaded = True
         return await self.state(model)
 
-    async def unload(
-        self, model: ModelId, target: UnloadTarget = UnloadTarget.ALL
-    ) -> ModelState:
+    async def unload(self, model: ModelId, target: UnloadTarget = UnloadTarget.ALL) -> ModelState:
         del target
         self.loaded = False
         return await self.state(model)
@@ -141,6 +149,125 @@ def test_image_options_require_dimensions_divisible_by_64() -> None:
         ImageGenerationOptions(width=1000, height=1024)
 
 
+def test_advanced_request_requires_inputs_for_selected_operation(tmp_path: Path) -> None:
+    model = ModelId(runtime="fooocus", name="model.safetensors")
+
+    with pytest.raises(ValueError, match="source image"):
+        ImageGenerationRequest(
+            operation_id="vary",
+            model=model,
+            prompt="variation",
+            operation=ImageOperation.VARY_SUBTLE,
+        )
+    with pytest.raises(ValueError, match="enabled reference"):
+        ImageGenerationRequest(
+            operation_id="prompt",
+            model=model,
+            prompt="reference",
+            operation=ImageOperation.IMAGE_PROMPT,
+        )
+    request = ImageGenerationRequest(
+        operation_id="describe",
+        model=model,
+        operation=ImageOperation.DESCRIBE,
+        source_image=tmp_path / "source.bmp",
+    )
+
+    assert request.prompt == ""
+    upscale = ImageGenerationRequest(
+        operation_id="upscale",
+        model=model,
+        operation=ImageOperation.UPSCALE_2,
+        source_image=tmp_path / "source.bmp",
+    )
+    assert upscale.prompt == ""
+
+
+def test_run_store_copies_and_normalizes_advanced_inputs(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        source = tmp_path / "outside" / "source.bmp"
+        reference = tmp_path / "outside" / "reference.jpg"
+        source.parent.mkdir()
+        Image.new("RGB", (80, 64), "blue").save(source)
+        Image.new("RGB", (32, 40), "red").save(reference)
+        model = ModelId(runtime="fooocus", name="model.safetensors")
+        request = ImageGenerationRequest(
+            operation_id="advanced-inputs",
+            model=model,
+            prompt="use source",
+            operation=ImageOperation.VARY_SUBTLE,
+            source_image=source,
+            references=(ImagePromptReference(path=reference),),
+            mix_references=True,
+        )
+        store = ImageRunStore(tmp_path / "outputs", allowed_source_roots=())
+
+        await store.begin(request)
+        prepared = await store.prepare_inputs(request)
+        manifest_path = tmp_path / "outputs" / "advanced-inputs" / "inputs" / "manifest.json"
+        manifest = json.loads(manifest_path.read_text("utf-8"))
+
+        assert prepared.source_image is not None
+        assert prepared.source_image.suffix == ".png"
+        assert prepared.references[0].path.suffix == ".png"
+        assert (manifest_path.parent / "originals" / "01-source.bmp").is_file()
+        assert len(manifest["inputs"]) == 2
+        assert manifest["inputs"][0]["source_name"] == "source.bmp"
+        assert str(source.parent) not in manifest_path.read_text("utf-8")
+
+    asyncio.run(scenario())
+
+
+def test_run_store_rejects_unapproved_input_format(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        source = tmp_path / "source.webp"
+        Image.new("RGB", (32, 32), "blue").save(source)
+        request = ImageGenerationRequest(
+            operation_id="webp-input",
+            model=ModelId(runtime="fooocus", name="model.safetensors"),
+            prompt="vary",
+            operation=ImageOperation.VARY_SUBTLE,
+            source_image=source,
+        )
+        store = ImageRunStore(tmp_path / "outputs", allowed_source_roots=())
+        await store.begin(request)
+
+        with pytest.raises(RuntimeRequestError, match="no está habilitado"):
+            await store.prepare_inputs(request)
+
+    asyncio.run(scenario())
+
+
+def test_gallery_memory_forgets_index_without_deleting_outputs(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        source = staging / "result.png"
+        Image.new("RGB", (64, 64), "green").save(source)
+        request = ImageGenerationRequest(
+            operation_id="gallery-run",
+            model=ModelId(runtime="fooocus", name="model.safetensors"),
+            prompt="green",
+        )
+        store = ImageRunStore(tmp_path / "outputs", allowed_source_roots=(staging,))
+        await store.begin(request)
+        artifact = await store.add_image(request, source, 1, None)
+        await store.set_gallery_memory(True)
+        await store.finish(request, (artifact,), elapsed_seconds=1, status="completed")
+
+        assert await store.list_gallery() == (artifact.path,)
+        await store.set_gallery_memory(False)
+        assert await store.list_gallery() == ()
+        assert artifact.path.is_file()
+        await store.set_gallery_memory(True)
+        await store.remember_gallery((artifact.path,))
+        assert await store.list_gallery() == (artifact.path,)
+        await store.forget_gallery()
+        assert artifact.path.is_file()
+
+    asyncio.run(scenario())
+
+
 def test_run_store_isolates_images_metadata_and_rejects_foreign_paths(tmp_path: Path) -> None:
     async def scenario() -> None:
         staging = tmp_path / "staging"
@@ -153,9 +280,7 @@ def test_run_store_isolates_images_metadata_and_rejects_foreign_paths(tmp_path: 
 
         await store.begin(request)
         artifact = await store.add_image(request, source, 1, 12)
-        result = await store.finish(
-            request, (artifact,), elapsed_seconds=1.5, status="completed"
-        )
+        result = await store.finish(request, (artifact,), elapsed_seconds=1.5, status="completed")
         metadata = json.loads((result.run_directory / "metadata.json").read_text("utf-8"))
 
         assert artifact.path == result.run_directory / "images" / "0001.png"

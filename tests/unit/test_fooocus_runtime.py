@@ -6,10 +6,15 @@ import pytest
 
 from aiopenstudio.core.contracts import (
     ComputeDevice,
+    EnhancementStep,
+    EnhanceOptions,
+    ImageGenerationCapabilities,
     ImageGenerationEvent,
     ImageGenerationEventKind,
     ImageGenerationRequest,
+    ImageOperation,
     LoadPolicy,
+    ModelId,
     ProcessState,
 )
 from aiopenstudio.core.errors import RuntimeRequestError
@@ -29,6 +34,10 @@ class FakeSupervisor:
         self.selected_checkpoint: str | None = None
 
     def preflight(self) -> tuple[str, ...]:
+        return ()
+
+    def preflight_for(self, request: ImageGenerationRequest) -> tuple[str, ...]:
+        del request
         return ()
 
     async def start(self) -> None:
@@ -59,6 +68,9 @@ class FakeTransport:
 
     async def list_styles(self) -> Sequence[str]:
         return ("Fooocus V2", "Fooocus Photograph")
+
+    async def image_capabilities(self) -> ImageGenerationCapabilities:
+        return ImageGenerationCapabilities()
 
     async def generate(
         self, request: ImageGenerationRequest
@@ -243,6 +255,32 @@ def test_supervisor_preflight_requires_offline_support_assets(tmp_path: Path) ->
     assert all("activo auxiliar Fooocus" in issue for issue in issues)
 
 
+def test_supervisor_blocks_missing_rembg_enhance_mask_asset(tmp_path: Path) -> None:
+    supervisor = FooocusProcessSupervisor(
+        FooocusProcessSettings(
+            home=tmp_path / "app",
+            python_executable=tmp_path / "python.exe",
+            models_root=tmp_path / "models",
+            staging_root=tmp_path / "staging",
+            runtime_root=tmp_path / "runtime",
+        )
+    )
+    request = ImageGenerationRequest(
+        operation_id="enhance-mask",
+        model=ModelId(runtime="fooocus", name="model.safetensors"),
+        prompt="portrait",
+        operation=ImageOperation.ENHANCE,
+        source_image=tmp_path / "source.png",
+        enhance=EnhanceOptions(
+            steps=(EnhancementStep(mask_model="u2net"),),
+        ),
+    )
+
+    issues = supervisor.preflight_for(request)
+
+    assert any("rembg\\u2net.onnx" in issue or "rembg/u2net.onnx" in issue for issue in issues)
+
+
 def test_supervisor_stages_bundled_prompt_expansion_files(tmp_path: Path) -> None:
     source = tmp_path / "app/models/prompt_expansion/fooocus_expansion"
     source.mkdir(parents=True)
@@ -372,9 +410,7 @@ def test_runtime_does_not_duplicate_transport_cancellation(tmp_path: Path) -> No
             runtime_root=tmp_path / "runtime",
         )
         transport = CancelEventTransport(tmp_path / "x.png")
-        runtime = FooocusRuntime(
-            FakeSupervisor(settings), transport, cancel_grace_seconds=0
-        )
+        runtime = FooocusRuntime(FakeSupervisor(settings), transport, cancel_grace_seconds=0)
         model = (await runtime.list_models())[0].id
         await runtime.load(model, LoadPolicy(device=ComputeDevice.GPU))
         request = ImageGenerationRequest(operation_id="run-cancel-event", model=model, prompt="x")

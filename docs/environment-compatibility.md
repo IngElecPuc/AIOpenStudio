@@ -31,7 +31,7 @@ antes de usarlo desde la aplicación.
 | sqlite-vec | 0.1.9, extensión cargable validada | Compatible, opcional y pre-1.0 | Desactivado hasta definir embeddings y dimensiones |
 | Ollama runtime | 0.32.14 accesible localmente | Compatible y validado | Mantener bind local y no descargar modelos implícitamente |
 | Cliente Python Ollama | Declarado en `requirements.txt` | Compatible | El paquete Python no instala el runtime Ollama |
-| Fooocus | Fuente v2.5.5, Python 3.10.11, PyTorch 2.7.1+cu128, activos, checkpoints, cliente 0.5.0 y servidor compatible presentes; CUDA detecta RTX 5060 capability 12.0 | Generación 1024×1024 y cancelaciones durante carga/sampler aprobadas | Validar concurrencia, UI y OOM; no compartir PyTorch con la app |
+| Fooocus | Fuente v2.5.5, Python 3.10.11, PyTorch 2.7.1+cu128, activos base, checkpoints, cliente 0.5.0 y servidor compatible presentes; CUDA detecta RTX 5060 capability 12.0 | Generación 1024×1024 y cancelaciones durante carga/sampler aprobadas; 23 activos avanzados aún ausentes | Validar capacidades avanzadas, concurrencia, UI y OOM; no compartir PyTorch con la app |
 | Whisper | Snapshots `small`, `medium` y `large-v3`; faster-whisper 1.2.1 y CTranslate2 4.8.1 | CPU `small` validado dos veces | Validar GPU, micrófono, cancelación, cambio a `medium` y OOM |
 | FFmpeg | No detectado en `PATH` | No bloquea faster-whisper/PyAV | Instalar sólo si otro backend o flujo externo lo requiere |
 | PostgreSQL | PostgreSQL Server 18 activo, inicio automático; integración secundaria local-first implementada; Alembic 1.19.1, psycopg 3.3.4 y WinVaultKeyring instalados | Cliente listo; conexión real pendiente y servidor disponible con riesgo de exposición | SQLite permanece autoritativa; revisar bind, firewall y `pg_hba.conf` antes de introducir secretos y ejecutar la validación optativa |
@@ -59,7 +59,7 @@ Todas las rutas de aplicación son configurables. Los valores relativos se resue
 | Catálogo compartido | `catalog/model-library.sqlite3` bajo la biblioteca | Solo metadatos y rutas relativas; no contiene pesos |
 | Pesos Ollama | `ollama/` bajo la biblioteca | Estructura administrada por Ollama mediante `OLLAMA_MODELS` |
 | Caché Hugging Face | `huggingface/` bajo la biblioteca | Compartida mediante `HF_HOME`; revisiones resueltas antes de registrar |
-| Whisper, Fooocus y embeddings | `whisper/`, `fooocus/` y `embeddings/` | Pesos reutilizables por varios proyectos; licencias por artefacto |
+| Whisper, Fooocus y embeddings | `whisper/`, `fooocus/` y `embeddings/` | Pesos reutilizables por varios proyectos; Fooocus reserva `fooocus/rembg/` mediante `U2NET_HOME`; licencias por artefacto |
 | Base local | `data/runtime/memory.sqlite3` | Referencias, conversaciones, resúmenes e índices; nunca pesos ni multimedia |
 | Base externa | PostgreSQL externo/opcional | Uso futuro para escenarios compartidos; no guardar binarios grandes |
 
@@ -73,6 +73,11 @@ La release oficial v2.5.5 conserva un stack anterior a Blackwell. La RTX 5060 re
 PyTorch CUDA 12.8 con `sm_120`; el soporte propuesto en el repositorio oficial seguía sin integrarse
 al auditarlo el 20 de agosto de 2026. No instalar el bundle oficial sin resolver y validar primero
 esta frontera dentro del entorno Fooocus aislado.
+
+Los modelos ONNX de máscara Enhance no usarán la ubicación predeterminada del perfil `~/.u2net`.
+El supervisor fija `U2NET_HOME` en `<MODEL_LIBRARY_ROOT>/fooocus/rembg`; cada archivo debe estar
+catalogado y verificado antes de ejecutar la capacidad, y el preflight bloquea su ausencia sin
+permitir la descarga automática de REMBG.
 
 ### Entornos Python de respaldo
 

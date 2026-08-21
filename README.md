@@ -178,7 +178,13 @@ El peso de expansión se complementa con siete archivos pequeños de configuraci
 ya vienen en la fuente oficial. El supervisor los sincroniza localmente desde la fuente fijada antes
 de arrancar; esta operación no accede a Internet.
 
-El inventario pendiente y los runs están en
+El preflight informa además las capacidades descubiertas y, para cada activo avanzado que ya
+exista, su tamaño y SHA-256. No inicia Fooocus ni descarga archivos. El registro de fuentes y
+licencias pendientes está en
+[models/fooocus/advanced-assets.json](models/fooocus/advanced-assets.json); no se debe adquirir
+ninguno de esos activos sin revisar su licencia y obtener autorización explícita. El diseño y las
+reglas de operación están en
+[docs/fooocus-advanced-capabilities.md](docs/fooocus-advanced-capabilities.md), y los runs reales en
 [docs/fooocus-validation.md](docs/fooocus-validation.md).
 
 ### Servicios externos
@@ -369,10 +375,16 @@ modelo realmente residente, cambia de modelo sin exigir una liberación manual, 
 segmentos, cancela y exporta TXT, JSON, SRT o VTT. Sus runs seguros y reales están en
 [docs/whisper-validation.md](docs/whisper-validation.md).
 
-El tab Fooocus ofrece parámetros, cola FIFO, cancelación y galería. Cada ejecución copia imágenes
-verificadas y metadatos a un directorio propio. Antes de usar la GPU espera operaciones activas,
-suspende residentes administrados y los restaura al terminar. La configuración y los runs delegados
-están en [docs/fooocus-validation.md](docs/fooocus-validation.md).
+El tab Fooocus ofrece texto-a-imagen, variaciones, upscale, inpaint/outpaint, referencias
+`Image Prompt`/`PyraCanny`/`CPDS`/`FaceSwap`, Describe y Enhance según las capacidades del esquema
+v2.5.5 instalado. Incluye cola reordenable de referencias, fuente/máscara, tres etapas Enhance
+descubiertas, miniaturas y galería navegable con memoria optativa. Acepta PNG, JPEG y BMP; cada
+entrada se copia y normaliza en el directorio de la ejecución antes de entregarla al proceso. Antes
+de usar GPU valida activos, espera operaciones activas, suspende residentes administrados y los
+restaura al terminar. La configuración y los runs delegados están en
+[docs/fooocus-validation.md](docs/fooocus-validation.md). La explicación completa de cada operación,
+parámetro y flujo práctico está en la
+[guía de uso de Fooocus](docs/fooocus-user-guide.md).
 
 El tab Monitor muestra CPU, RAM, GPU/VRAM, procesos, residencia por runtime, cola administrada,
 tokens de la última inferencia y una lista segura de configuración Ollama. La recolección puede

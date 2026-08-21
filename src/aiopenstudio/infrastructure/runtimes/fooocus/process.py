@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -14,6 +15,12 @@ from pathlib import Path
 
 import psutil  # type: ignore[import-untyped]
 
+from aiopenstudio.core.contracts import (
+    DescribeContent,
+    ImageGenerationRequest,
+    ImageOperation,
+    ImagePromptKind,
+)
 from aiopenstudio.core.errors import RuntimeUnavailableError
 
 
@@ -49,6 +56,31 @@ class FooocusProcessSupervisor:
         "tokenizer_config.json",
         "tokenizer.json",
         "vocab.json",
+    )
+    _ADVANCED_ASSET_PATHS = (
+        "upscale_models/fooocus_upscaler_s409985e5.bin",
+        "inpaint/fooocus_inpaint_head.pth",
+        "inpaint/inpaint_v26.fooocus.patch",
+        "inpaint/groundingdino_swint_ogc.pth",
+        "controlnet/control-lora-canny-rank128.safetensors",
+        "controlnet/fooocus_xl_cpds_128.safetensors",
+        "controlnet/fooocus_ip_negative.safetensors",
+        "controlnet/ip-adapter-plus_sdxl_vit-h.bin",
+        "controlnet/ip-adapter-plus-face_sdxl_vit-h.bin",
+        "clip_vision/clip_vision_vit_h.safetensors",
+        "clip_vision/model_base_caption_capfilt_large.pth",
+        "clip_vision/wd-v1-4-moat-tagger-v2.onnx",
+        "clip_vision/wd-v1-4-moat-tagger-v2.csv",
+        "sam/sam_vit_b_01ec64.pth",
+        "sam/sam_vit_l_0b3195.pth",
+        "sam/sam_vit_h_4b8939.pth",
+        "rembg/u2net.onnx",
+        "rembg/u2netp.onnx",
+        "rembg/u2net_human_seg.onnx",
+        "rembg/u2net_cloth_seg.onnx",
+        "rembg/silueta.onnx",
+        "rembg/isnet-general-use.onnx",
+        "rembg/isnet-anime.onnx",
     )
 
     def __init__(self, settings: FooocusProcessSettings) -> None:
@@ -99,26 +131,138 @@ class FooocusProcessSupervisor:
         required_assets = (
             self.settings.models_root / "vae_approx/xlvaeapp.pth",
             self.settings.models_root / "vae_approx/vaeapp_sd15.pth",
-            self.settings.models_root
-            / "vae_approx/xl-to-v1_interposer-v4.0.safetensors",
-            self.settings.models_root
-            / "prompt_expansion/fooocus_expansion/pytorch_model.bin",
+            self.settings.models_root / "vae_approx/xl-to-v1_interposer-v4.0.safetensors",
+            self.settings.models_root / "prompt_expansion/fooocus_expansion/pytorch_model.bin",
         )
         for asset in required_assets:
             if not asset.is_file():
                 issues.append(f"Falta el activo auxiliar Fooocus local: {asset}")
-        bundled_expansion = (
-            self.settings.home / "models/prompt_expansion/fooocus_expansion"
-        )
+        bundled_expansion = self.settings.home / "models/prompt_expansion/fooocus_expansion"
         for filename in self._PROMPT_EXPANSION_SUPPORT_FILES:
             source = bundled_expansion / filename
             if not source.is_file():
                 issues.append(
-                    "La fuente Fooocus no contiene el archivo de expansión incluido "
-                    f"{source}."
+                    f"La fuente Fooocus no contiene el archivo de expansión incluido {source}."
                 )
         issues.extend(self._dependency_issues())
         return tuple(issues)
+
+    def preflight_for(self, request: ImageGenerationRequest) -> tuple[str, ...]:
+        """Block operations whose upstream helper would otherwise download an asset."""
+        required: set[Path] = set()
+        issues: list[str] = []
+        models = self.settings.models_root
+        if request.operation in {
+            ImageOperation.UPSCALE_1_5,
+            ImageOperation.UPSCALE_2,
+            ImageOperation.UPSCALE_FAST_2,
+        } or (
+            request.enhance is not None
+            and request.enhance.uov_operation
+            in {
+                ImageOperation.UPSCALE_1_5,
+                ImageOperation.UPSCALE_2,
+                ImageOperation.UPSCALE_FAST_2,
+            }
+        ):
+            required.add(models / "upscale_models/fooocus_upscaler_s409985e5.bin")
+        if request.operation in {
+            ImageOperation.INPAINT,
+            ImageOperation.OUTPAINT,
+            ImageOperation.ENHANCE,
+        }:
+            required.update(
+                {
+                    models / "inpaint/fooocus_inpaint_head.pth",
+                    models / "inpaint/inpaint_v26.fooocus.patch",
+                }
+            )
+        reference_kinds = {reference.kind for reference in request.references if reference.enabled}
+        if ImagePromptKind.PYRA_CANNY in reference_kinds:
+            required.add(models / "controlnet/control-lora-canny-rank128.safetensors")
+        if ImagePromptKind.CPDS in reference_kinds:
+            required.add(models / "controlnet/fooocus_xl_cpds_128.safetensors")
+        if reference_kinds & {ImagePromptKind.IMAGE_PROMPT, ImagePromptKind.FACE_SWAP}:
+            required.update(
+                {
+                    models / "clip_vision/clip_vision_vit_h.safetensors",
+                    models / "controlnet/fooocus_ip_negative.safetensors",
+                }
+            )
+        if ImagePromptKind.IMAGE_PROMPT in reference_kinds:
+            required.add(models / "controlnet/ip-adapter-plus_sdxl_vit-h.bin")
+        if ImagePromptKind.FACE_SWAP in reference_kinds:
+            required.add(models / "controlnet/ip-adapter-plus-face_sdxl_vit-h.bin")
+        if request.operation is ImageOperation.DESCRIBE:
+            if DescribeContent.PHOTOGRAPH in request.describe_content:
+                required.add(models / "clip_vision/model_base_caption_capfilt_large.pth")
+            if DescribeContent.ART_ANIME in request.describe_content:
+                required.update(
+                    {
+                        models / "clip_vision/wd-v1-4-moat-tagger-v2.onnx",
+                        models / "clip_vision/wd-v1-4-moat-tagger-v2.csv",
+                    }
+                )
+        if request.operation is ImageOperation.ENHANCE and request.enhance is not None:
+            for step in request.enhance.steps:
+                if not step.enabled:
+                    continue
+                if step.detection_prompt:
+                    required.add(models / "inpaint/groundingdino_swint_ogc.pth")
+                if step.mask_model == "sam":
+                    sam_files = {
+                        "vit_b": "sam_vit_b_01ec64.pth",
+                        "vit_l": "sam_vit_l_0b3195.pth",
+                        "vit_h": "sam_vit_h_4b8939.pth",
+                    }
+                    required.add(models / "sam" / sam_files.get(step.sam_model, "missing"))
+                else:
+                    rembg_models = {
+                        "u2net",
+                        "u2netp",
+                        "u2net_human_seg",
+                        "u2net_cloth_seg",
+                        "silueta",
+                        "isnet-general-use",
+                        "isnet-anime",
+                    }
+                    if step.mask_model not in rembg_models:
+                        issues.append(
+                            f"El modelo de máscara Enhance {step.mask_model!r} no pertenece "
+                            "al esquema Fooocus v2.5.5 fijado."
+                        )
+                    else:
+                        required.add(models / "rembg" / f"{step.mask_model}.onnx")
+        issues.extend(
+            "Falta el activo avanzado Fooocus local "
+            f"{path}; la descarga automática permanece bloqueada."
+            for path in sorted(required)
+            if not path.is_file()
+        )
+        return tuple(issues)
+
+    def advanced_asset_inventory(self) -> tuple[dict[str, object], ...]:
+        inventory: list[dict[str, object]] = []
+        for relative_path in self._ADVANCED_ASSET_PATHS:
+            path = self.settings.models_root / relative_path
+            exists = path.is_file()
+            inventory.append(
+                {
+                    "relative_path": relative_path,
+                    "exists": exists,
+                    "size_bytes": path.stat().st_size if exists else None,
+                    "sha256": self._sha256(path) if exists else None,
+                }
+            )
+        return tuple(inventory)
+
+    @staticmethod
+    def _sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
 
     def _dependency_issues(self) -> tuple[str, ...]:
         environment_root = self.settings.python_executable.parent.parent
@@ -193,6 +337,7 @@ class FooocusProcessSupervisor:
                 "TRANSFORMERS_OFFLINE": "1",
                 "GRADIO_ANALYTICS_ENABLED": "False",
                 "GRADIO_TEMP_DIR": str(self.settings.runtime_root / "gradio"),
+                "U2NET_HOME": str(self.settings.models_root / "rembg"),
                 "HTTP_PROXY": "http://127.0.0.1:9",
                 "HTTPS_PROXY": "http://127.0.0.1:9",
                 "ALL_PROXY": "http://127.0.0.1:9",
@@ -290,6 +435,8 @@ class FooocusProcessSupervisor:
             "path_inpaint": str(self.settings.models_root / "inpaint"),
             "path_controlnet": str(self.settings.models_root / "controlnet"),
             "path_clip_vision": str(self.settings.models_root / "clip_vision"),
+            "path_sam": str(self.settings.models_root / "sam"),
+            "path_safety_checker": str(self.settings.models_root / "safety_checker"),
             "path_fooocus_expansion": str(
                 self.settings.models_root / "prompt_expansion/fooocus_expansion"
             ),
@@ -303,9 +450,7 @@ class FooocusProcessSupervisor:
     def _stage_prompt_expansion_support_files(self) -> None:
         """Complete the shared expansion directory from the pinned Fooocus source."""
         source_root = self.settings.home / "models/prompt_expansion/fooocus_expansion"
-        destination_root = (
-            self.settings.models_root / "prompt_expansion/fooocus_expansion"
-        )
+        destination_root = self.settings.models_root / "prompt_expansion/fooocus_expansion"
         destination_root.mkdir(parents=True, exist_ok=True)
         for filename in self._PROMPT_EXPANSION_SUPPORT_FILES:
             source = source_root / filename

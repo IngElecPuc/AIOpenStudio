@@ -21,6 +21,7 @@ from aiopenstudio.core.contracts import (
     ExecutionRecord,
     ExecutionStatus,
     ImageArtifact,
+    ImageGenerationCapabilities,
     ImageGenerationEvent,
     ImageGenerationEventKind,
     ImageGenerationRequest,
@@ -55,13 +56,35 @@ class ImageRunStore:
         *,
         allowed_source_roots: Sequence[Path],
         max_image_bytes: int = 256 * 1024 * 1024,
+        max_input_pixels: int = 40_000_000,
     ) -> None:
         self._output_root = output_root.resolve()
         self._allowed_source_roots = tuple(path.resolve() for path in allowed_source_roots)
         self._max_image_bytes = max_image_bytes
+        self._max_input_pixels = max_input_pixels
+        self._gallery_settings_path = self._output_root / "gallery-settings.json"
+        self._gallery_index_path = self._output_root / "gallery-index.json"
 
     async def begin(self, request: ImageGenerationRequest) -> Path:
         return await asyncio.to_thread(self._begin_blocking, request)
+
+    async def prepare_inputs(self, request: ImageGenerationRequest) -> ImageGenerationRequest:
+        return await asyncio.to_thread(self._prepare_inputs_blocking, request)
+
+    async def gallery_memory_enabled(self) -> bool:
+        return await asyncio.to_thread(self._gallery_memory_enabled_blocking)
+
+    async def set_gallery_memory(self, enabled: bool) -> None:
+        await asyncio.to_thread(self._set_gallery_memory_blocking, enabled)
+
+    async def remember_gallery(self, paths: Sequence[Path]) -> None:
+        await asyncio.to_thread(self._append_gallery_blocking, tuple(paths))
+
+    async def list_gallery(self) -> tuple[Path, ...]:
+        return await asyncio.to_thread(self._list_gallery_blocking)
+
+    async def forget_gallery(self) -> None:
+        await asyncio.to_thread(self._forget_gallery_blocking)
 
     async def add_image(
         self,
@@ -70,9 +93,7 @@ class ImageRunStore:
         index: int,
         seed: int | None,
     ) -> ImageArtifact:
-        return await asyncio.to_thread(
-            self._add_image_blocking, request, source, index, seed
-        )
+        return await asyncio.to_thread(self._add_image_blocking, request, source, index, seed)
 
     async def record_event(self, event: ImageGenerationEvent) -> None:
         await asyncio.to_thread(self._record_event_blocking, event)
@@ -100,7 +121,109 @@ class ImageRunStore:
     def _begin_blocking(self, request: ImageGenerationRequest) -> Path:
         run = self._run_directory(request.operation_id)
         (run / "images").mkdir(parents=True, exist_ok=True)
+        (run / "inputs" / "originals").mkdir(parents=True, exist_ok=True)
+        (run / "inputs" / "normalized").mkdir(parents=True, exist_ok=True)
         return run
+
+    def _prepare_inputs_blocking(self, request: ImageGenerationRequest) -> ImageGenerationRequest:
+        run = self._run_directory(request.operation_id)
+        manifest: list[dict[str, object]] = []
+        counter = 0
+
+        def stage(source: Path | None, role: str) -> Path | None:
+            nonlocal counter
+            if source is None:
+                return None
+            counter += 1
+            source = source.expanduser().resolve()
+            if not source.is_file():
+                raise RuntimeRequestError(f"No existe la imagen {role}: {source.name}")
+            if source.suffix.casefold() not in {".png", ".jpg", ".jpeg", ".bmp"}:
+                raise RuntimeRequestError(
+                    f"El formato de {source.name} no está habilitado; usa PNG, JPEG o BMP."
+                )
+            size_bytes = source.stat().st_size
+            if size_bytes > self._max_image_bytes:
+                raise RuntimeRequestError(f"La imagen {source.name} supera el límite configurado.")
+            image_module = import_module("PIL.Image")
+            image_ops = import_module("PIL.ImageOps")
+            try:
+                with image_module.open(source) as opened:
+                    actual_format = str(opened.format or "").upper()
+                    frames = int(getattr(opened, "n_frames", 1))
+                    width, height = opened.size
+                    opened.verify()
+                if actual_format not in {"PNG", "JPEG", "BMP"}:
+                    raise RuntimeRequestError(
+                        f"El contenido real de {source.name} no es PNG, JPEG o BMP."
+                    )
+                if frames != 1:
+                    raise RuntimeRequestError("No se admiten imágenes animadas o multipágina.")
+                if width < 1 or height < 1 or width * height > self._max_input_pixels:
+                    raise RuntimeRequestError(
+                        f"La imagen {source.name} excede el límite de píxeles."
+                    )
+                with image_module.open(source) as opened:
+                    transposed = image_ops.exif_transpose(opened)
+                    bands = transposed.getbands()
+                    normalized = transposed.convert(
+                        "RGBA" if "A" in bands or "transparency" in transposed.info else "RGB"
+                    )
+            except RuntimeRequestError:
+                raise
+            except Exception as error:
+                raise RuntimeRequestError(
+                    f"No fue posible validar la imagen {source.name}: {error}"
+                ) from error
+
+            stem = f"{counter:02d}-{role}"
+            original = run / "inputs" / "originals" / f"{stem}{source.suffix.casefold()}"
+            normalized_path = run / "inputs" / "normalized" / f"{stem}.png"
+            original_temporary = original.with_name(original.name + ".partial")
+            normalized_temporary = normalized_path.with_name(normalized_path.name + ".partial")
+            shutil.copy2(source, original_temporary)
+            original_temporary.replace(original)
+            normalized.save(normalized_temporary, format="PNG")
+            normalized_temporary.replace(normalized_path)
+            normalized.close()
+            manifest.append(
+                {
+                    "role": role,
+                    "source_name": source.name,
+                    "source_format": actual_format,
+                    "source_size_bytes": size_bytes,
+                    "source_sha256": self._sha256(original),
+                    "normalized_path": str(normalized_path),
+                    "normalized_sha256": self._sha256(normalized_path),
+                    "width": width,
+                    "height": height,
+                }
+            )
+            return normalized_path
+
+        source_image = stage(request.source_image, "source")
+        mask_image = stage(request.mask_image, "mask")
+        references = []
+        for index, reference in enumerate(request.references, start=1):
+            if not reference.enabled:
+                continue
+            staged = stage(reference.path, f"reference-{index}")
+            if staged is not None:
+                references.append(reference.model_copy(update={"path": staged}))
+        destination = run / "inputs" / "manifest.json"
+        temporary = destination.with_name(destination.name + ".partial")
+        temporary.write_text(
+            json.dumps({"schema_version": 1, "inputs": manifest}, indent=2),
+            encoding="utf-8",
+        )
+        temporary.replace(destination)
+        return request.model_copy(
+            update={
+                "source_image": source_image,
+                "mask_image": mask_image,
+                "references": tuple(references),
+            }
+        )
 
     def _add_image_blocking(
         self,
@@ -128,7 +251,7 @@ class ImageRunStore:
         temporary = destination.with_name(destination.name + ".partial")
         shutil.copy2(source, temporary)
         temporary.replace(destination)
-        digest = hashlib.sha256(destination.read_bytes()).hexdigest()
+        digest = self._sha256(destination)
         return ImageArtifact(
             path=destination,
             metadata_path=self._run_directory(request.operation_id) / "metadata.json",
@@ -169,10 +292,10 @@ class ImageRunStore:
         }
         destination = run / "metadata.json"
         temporary = destination.with_name(destination.name + ".partial")
-        temporary.write_text(
-            json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        temporary.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
         temporary.replace(destination)
+        if status == "completed" and self._gallery_memory_enabled_blocking():
+            self._append_gallery_blocking(tuple(image.path for image in images))
         return ImageGenerationResult(
             operation_id=request.operation_id,
             model=request.model,
@@ -188,6 +311,69 @@ class ImageRunStore:
         if not operation_id or any(character not in safe_characters for character in operation_id):
             raise RuntimeRequestError("El identificador de ejecución no es seguro para una ruta.")
         return self._output_root / operation_id
+
+    @staticmethod
+    def _sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def _gallery_memory_enabled_blocking(self) -> bool:
+        try:
+            payload = json.loads(self._gallery_settings_path.read_text("utf-8"))
+        except (OSError, ValueError, TypeError):
+            return False
+        return payload.get("remember_gallery") is True
+
+    def _set_gallery_memory_blocking(self, enabled: bool) -> None:
+        self._output_root.mkdir(parents=True, exist_ok=True)
+        temporary = self._gallery_settings_path.with_name(
+            self._gallery_settings_path.name + ".partial"
+        )
+        temporary.write_text(json.dumps({"remember_gallery": enabled}, indent=2), encoding="utf-8")
+        temporary.replace(self._gallery_settings_path)
+        if not enabled:
+            self._forget_gallery_blocking()
+
+    def _append_gallery_blocking(self, paths: tuple[Path, ...]) -> None:
+        current = list(self._list_gallery_blocking())
+        for path in paths:
+            resolved = path.resolve()
+            if resolved not in current:
+                current.append(resolved)
+        temporary = self._gallery_index_path.with_name(self._gallery_index_path.name + ".partial")
+        temporary.write_text(
+            json.dumps(
+                {"schema_version": 1, "images": [str(path) for path in current]},
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        temporary.replace(self._gallery_index_path)
+
+    def _list_gallery_blocking(self) -> tuple[Path, ...]:
+        if not self._gallery_memory_enabled_blocking():
+            return ()
+        try:
+            payload = json.loads(self._gallery_index_path.read_text("utf-8"))
+        except (OSError, ValueError, TypeError):
+            return ()
+        paths: list[Path] = []
+        for raw_path in payload.get("images", []):
+            if not isinstance(raw_path, str):
+                continue
+            path = Path(raw_path).resolve()
+            if path.is_relative_to(self._output_root) and path.is_file():
+                paths.append(path)
+        return tuple(dict.fromkeys(paths))
+
+    def _forget_gallery_blocking(self) -> None:
+        try:
+            self._gallery_index_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 class ImageGenerationService:
@@ -226,6 +412,27 @@ class ImageGenerationService:
 
     def preflight(self) -> tuple[str, ...]:
         return self._runtime.preflight()
+
+    def preflight_for(self, request: ImageGenerationRequest) -> tuple[str, ...]:
+        return self._runtime.preflight_for(request)
+
+    async def image_capabilities(self) -> ImageGenerationCapabilities:
+        return await self._runtime.image_capabilities()
+
+    async def gallery_memory_enabled(self) -> bool:
+        return await self._run_store.gallery_memory_enabled()
+
+    async def set_gallery_memory(self, enabled: bool) -> None:
+        await self._run_store.set_gallery_memory(enabled)
+
+    async def remember_gallery(self, paths: Sequence[Path]) -> None:
+        await self._run_store.remember_gallery(paths)
+
+    async def list_gallery(self) -> tuple[Path, ...]:
+        return await self._run_store.list_gallery()
+
+    async def forget_gallery(self) -> None:
+        await self._run_store.forget_gallery()
 
     @property
     def active_operation(self) -> str | None:
@@ -347,6 +554,10 @@ class ImageGenerationService:
         loaded = False
         cancelled = False
         try:
+            request = await self._run_store.prepare_inputs(request)
+            request_issues = self._runtime.preflight_for(request)
+            if request_issues:
+                raise RuntimeRequestError(" ".join(request_issues))
             await self._emit(
                 job,
                 ImageGenerationEvent(
@@ -481,6 +692,10 @@ class ImageGenerationService:
                 request.negative_prompt.encode("utf-8")
             ).hexdigest(),
             "options": request.options.model_dump(mode="json"),
+            "operation": request.operation.value,
+            "input_count": int(request.source_image is not None)
+            + int(request.mask_image is not None)
+            + len(request.references),
         }
         result_metadata: dict[str, object] = {}
         artifacts: tuple[ArtifactRecord, ...] = ()

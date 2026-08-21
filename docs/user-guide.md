@@ -39,11 +39,15 @@ exportaciones que necesites y no compartas el ZIP de diagnósticos como sustitut
 ## Fooocus e imágenes
 
 El tab `Fooocus` administra una cola FIFO, progreso, cancelación y galería. Cada ejecución aceptada
-crea una carpeta propia con imágenes y metadatos. La integración actual es texto-a-imagen; las
-transformaciones con imágenes de referencia pertenecen a la fase específica posterior.
+crea una carpeta propia con imágenes y metadatos. Además de texto a imagen, expone variaciones,
+upscale, inpaint/outpaint, Image Prompt, PyraCanny, CPDS, FaceSwap, Describe y Enhance. Las entradas
+se validan, copian y normalizan dentro de la ejecución antes de enviarse al proceso aislado.
 
 Fooocus se ejecuta en un entorno Python aislado. No actives ese entorno para iniciar AIOpenStudio y
-no uses el actualizador upstream desde la aplicación.
+no uses el actualizador upstream desde la aplicación. Consulta la
+[guía de uso de Fooocus](fooocus-user-guide.md) para aprender cada parámetro, administrar
+referencias y seguir recetas completas. Las capacidades que necesiten un activo local ausente se
+bloquean antes de utilizar GPU y nunca deben descargarlo implícitamente.
 
 ## Monitor y memoria
 
