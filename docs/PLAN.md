@@ -310,8 +310,15 @@ presupuestos de contexto y continuidad local entre reinicios.
 **Objetivo:** exponer las capacidades útiles de faster-whisper/Whisper que aún no están disponibles
 en la suite, con controles comprensibles, exportación reproducible y límites claros del backend.
 
-**Estado:** propuesta. La versión fijada es faster-whisper 1.2.1. No se instalarán modelos ni
-dependencias adicionales; cada control se descubrirá o adaptará tras el contrato común.
+**Estado:** implementación completa; cierre real pendiente. La versión fijada es faster-whisper
+1.2.1. Están implementados contratos, adaptador, cola FIFO secuencial, intervalos, correcciones no
+destructivas, búsqueda, exportaciones detalladas, UI progresiva con texto limpio predeterminado y
+vista experimental no-streaming por fragmentos solapados. La guía exhaustiva y el validador
+optativo están disponibles; faltan ejecutar la matriz real, micrófono, intercambio GPU, `medium` y
+OOM autorizado. No se instalarán modelos ni dependencias adicionales. La asimetría entre idiomas
+de entrada y salida queda fijada en
+[Idiomas y tareas de Whisper](whisper-language-support.md), y el uso completo en la
+[Guía de Whisper](whisper-user-guide.md).
 
 - Añadir detección automática de idioma con probabilidad visible y selección manual. Permitir
   `transcribe` y traducción nativa a inglés, avisando que Whisper no traduce directamente a otros

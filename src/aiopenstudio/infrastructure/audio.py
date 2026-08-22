@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import math
 import wave
 from importlib import import_module
 from pathlib import Path
@@ -11,6 +12,39 @@ from threading import RLock
 from typing import Any
 
 from aiopenstudio.core.errors import AudioCaptureUnavailableError, RuntimeRequestError
+
+
+class PyAVAudioInspector:
+    """Inspect duration through the already pinned PyAV container reader."""
+
+    async def duration_seconds(self, source: Path) -> float:
+        return await asyncio.to_thread(self._duration_blocking, source)
+
+    @staticmethod
+    def _duration_blocking(source: Path) -> float:
+        if not source.is_file():
+            raise RuntimeRequestError("El archivo de audio seleccionado no existe.")
+        if importlib.util.find_spec("av") is None:
+            raise RuntimeRequestError("La vista por fragmentos requiere PyAV.")
+        av = import_module("av")
+        try:
+            with av.open(str(source), mode="r") as container:
+                if container.duration is not None:
+                    duration = float(container.duration / av.time_base)
+                else:
+                    candidates = [
+                        float(stream.duration * stream.time_base)
+                        for stream in container.streams.audio
+                        if stream.duration is not None and stream.time_base is not None
+                    ]
+                    duration = max(candidates, default=0.0)
+        except Exception as error:
+            raise RuntimeRequestError(
+                "No fue posible leer la duración del audio con PyAV."
+            ) from error
+        if not math.isfinite(duration) or duration <= 0:
+            raise RuntimeRequestError("El contenedor no informa una duración de audio válida.")
+        return duration
 
 
 class SoundDeviceAudioRecorder:

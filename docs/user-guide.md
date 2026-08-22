@@ -29,12 +29,21 @@ catálogo.
 
 ## Whisper y transcripciones
 
-El tab `Whisper` abre un audio o captura el micrófono, selecciona un modelo local y exporta TXT,
-JSON, SRT o VTT. La selección visible y el modelo residente son estados diferentes; cambiar de
-modelo descarga el anterior cuando corresponde.
+El tab `Whisper` abre uno o varios audios o captura el micrófono. Su cola es FIFO y secuencial: no
+activa inferencia batch. La selección visible y el modelo residente son estados diferentes; cambiar
+de modelo descarga el anterior cuando corresponde.
+
+`Texto limpio` es la vista predeterminada y no añade timestamps. `Detalle opcional` permite buscar,
+mostrar palabras y confianza, corregir un segmento o restaurar el original. `Ajustes` contiene
+idioma/tarea condicionados por el modelo, VAD, intervalos, prompt, hotwords y parámetros avanzados;
+los campos vacíos conservan los valores del backend. Las exportaciones TXT/SRT/VTT/CSV/TSV usan las
+correcciones, mientras el JSON reproducible conserva también el resultado original.
 
 Las grabaciones temporales y resultados viven fuera de la base de datos. Conserva únicamente las
 exportaciones que necesites y no compartas el ZIP de diagnósticos como sustituto del audio original.
+Consulta [Idiomas y tareas de Whisper](whisper-language-support.md) antes de usar traducción y la
+[guía completa de Whisper](whisper-user-guide.md) para VAD, prompts, decodificación, recetas y la
+vista experimental por fragmentos.
 
 ## Fooocus e imágenes
 

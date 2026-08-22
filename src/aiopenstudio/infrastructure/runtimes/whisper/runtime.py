@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import logging
 import multiprocessing
 import queue
@@ -25,12 +26,16 @@ from aiopenstudio.core.contracts import (
     RuntimeHealth,
     TranscriptionEvent,
     TranscriptionEventKind,
+    TranscriptionModelCapabilities,
+    TranscriptionOptions,
     TranscriptionProgress,
     TranscriptionRequest,
     TranscriptionResult,
     TranscriptionSegment,
     TranscriptionStage,
+    TranscriptionTask,
     UnloadTarget,
+    VadMode,
 )
 from aiopenstudio.core.errors import (
     ModelNotInstalledError,
@@ -41,6 +46,17 @@ from aiopenstudio.core.errors import (
 
 _RUNTIME_NAME = "faster-whisper"
 _MODEL_FILES = ("config.json", "model.bin", "tokenizer.json")
+_MULTILINGUAL_SOURCE_LANGUAGE_CODES = (
+    "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs",
+    "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi",
+    "fo", "fr", "gl", "gu", "ha", "haw", "he", "hi", "hr", "ht", "hu", "hy",
+    "id", "is", "it", "ja", "jw", "ka", "kk", "km", "kn", "ko", "la", "lb",
+    "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt",
+    "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt", "ro", "ru",
+    "sa", "sd", "si", "sk", "sl", "sn", "so", "sq", "sr", "su", "sv", "sw",
+    "ta", "te", "tg", "th", "tk", "tl", "tr", "tt", "uk", "ur", "uz", "vi",
+    "yi", "yo", "zh", "yue",
+)
 
 
 class FasterWhisperRuntime:
@@ -313,15 +329,35 @@ class FasterWhisperRuntime:
             )
             name = model_path.name
             variant = name.removeprefix("faster-whisper-") or name
+            transcription_capabilities = _model_transcription_capabilities(
+                config_path,
+                variant,
+            )
+            capabilities = {
+                "speech-to-text",
+                "timestamps",
+                "word-timestamps",
+                "vad",
+                "intervals",
+                "hotwords",
+            }
+            if transcription_capabilities.supports_translation:
+                capabilities.add("translation-to-english")
             descriptors.append(
                 ModelDescriptor(
                     id=ModelId(runtime=self.name, name=name, variant=variant),
                     display_name=f"Whisper {variant}",
-                    capabilities=frozenset({"speech-to-text", "translation", "timestamps"}),
+                    capabilities=frozenset(capabilities),
                     weights_path=model_path,
                     size_bytes=size_bytes,
                     installed=True,
-                    metadata={"backend": "faster-whisper", "local_only": True},
+                    metadata={
+                        "backend": "faster-whisper",
+                        "local_only": True,
+                        "transcription_capabilities": (
+                            transcription_capabilities.model_dump(mode="json")
+                        ),
+                    },
                 )
             )
         return tuple(sorted(descriptors, key=lambda item: item.size_bytes or 0))
@@ -430,10 +466,60 @@ class FasterWhisperRuntime:
             )
 
 
+def _model_transcription_capabilities(
+    config_path: Path,
+    variant: str,
+) -> TranscriptionModelCapabilities:
+    """Derive language semantics from the installed CTranslate2 model config."""
+    normalized_variant = variant.casefold()
+    try:
+        raw_config = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        raw_config = {}
+
+    raw_count = raw_config.get("num_languages")
+    language_count = raw_count if isinstance(raw_count, int) else None
+    english_only = language_count == 1 or normalized_variant.endswith(".en")
+    turbo = "turbo" in normalized_variant
+    config_verified = language_count is not None
+
+    if english_only:
+        return TranscriptionModelCapabilities(
+            source_language_codes=("en",),
+            translation_target_codes=(),
+            supports_language_detection=False,
+            supports_translation=False,
+            capabilities_verified=config_verified,
+            limitation=(
+                "El modelo instalado es sólo para audio en inglés; la traducción no aplica."
+            ),
+        )
+
+    limitation = None
+    if turbo:
+        limitation = (
+            "Whisper turbo no fue entrenado para traducción; sólo se habilita transcripción."
+        )
+    elif not config_verified:
+        limitation = (
+            "No fue posible verificar num_languages en config.json; se usa el catálogo "
+            "multilingüe oficial de Whisper."
+        )
+    return TranscriptionModelCapabilities(
+        source_language_codes=_MULTILINGUAL_SOURCE_LANGUAGE_CODES,
+        translation_target_codes=() if turbo else ("en",),
+        supports_language_detection=True,
+        supports_translation=not turbo,
+        capabilities_verified=config_verified,
+        limitation=limitation,
+    )
+
+
 def _worker_main(commands: Any, responses: Any, cancel_event: Any) -> None:
     model: Any | None = None
     model_path: str | None = None
     device = "cpu"
+    compute_type = "int8"
     while True:
         command = commands.get()
         kind = command.get("kind")
@@ -471,7 +557,14 @@ def _worker_main(commands: Any, responses: Any, cancel_event: Any) -> None:
             elif kind == "transcribe":
                 if model is None:
                     raise RuntimeError("No hay un modelo cargado en el worker.")
-                _worker_transcribe(model, command, responses, cancel_event)
+                _worker_transcribe(
+                    model,
+                    command,
+                    responses,
+                    cancel_event,
+                    device=device,
+                    compute_type=compute_type,
+                )
         except Exception as error:
             message = str(error)
             lowered = message.casefold()
@@ -493,10 +586,13 @@ def _worker_transcribe(
     command: dict[str, Any],
     responses: Any,
     cancel_event: Any,
+    *,
+    device: str,
+    compute_type: str,
 ) -> None:
     operation_id = str(command["operation_id"])
     source_path = Path(str(command["source_path"]))
-    options = dict(command["options"])
+    options = TranscriptionOptions.model_validate(command["options"])
     model_id = ModelId.model_validate(command["model"])
     started = time.perf_counter()
     responses.put({"kind": TranscriptionEventKind.STARTED.value, "operation_id": operation_id})
@@ -512,11 +608,7 @@ def _worker_transcribe(
     )
     segments_iterator, info = model.transcribe(
         str(source_path),
-        language=options.get("language"),
-        task=options.get("task", "transcribe"),
-        beam_size=int(options.get("beam_size", 5)),
-        vad_filter=bool(options.get("vad_filter", True)),
-        word_timestamps=bool(options.get("word_timestamps", False)),
+        **_runtime_transcribe_arguments(options),
     )
     total = float(info.duration)
     serialized_segments: list[dict[str, Any]] = []
@@ -536,6 +628,10 @@ def _worker_transcribe(
             "end_seconds": float(segment.end),
             "text": str(segment.text),
             "words": words,
+            "average_log_probability": _optional_float(segment, "avg_logprob"),
+            "no_speech_probability": _optional_float(segment, "no_speech_prob"),
+            "compression_ratio": _optional_float(segment, "compression_ratio"),
+            "temperature": _optional_float(segment, "temperature"),
         }
         serialized_segments.append(serialized)
         responses.put(
@@ -560,7 +656,16 @@ def _worker_transcribe(
         )
         if cancel_event.is_set():
             result = _result_payload(
-                operation_id, model_id, source_path, info, started, serialized_segments, True
+                operation_id,
+                model_id,
+                source_path,
+                info,
+                started,
+                serialized_segments,
+                True,
+                options,
+                device,
+                compute_type,
             )
             responses.put(
                 {
@@ -572,7 +677,16 @@ def _worker_transcribe(
             )
             return
     result = _result_payload(
-        operation_id, model_id, source_path, info, started, serialized_segments, False
+        operation_id,
+        model_id,
+        source_path,
+        info,
+        started,
+        serialized_segments,
+        False,
+        options,
+        device,
+        compute_type,
     )
     responses.put(
         {
@@ -583,6 +697,109 @@ def _worker_transcribe(
     )
 
 
+def _runtime_transcribe_arguments(options: TranscriptionOptions) -> dict[str, Any]:
+    arguments: dict[str, Any] = {
+        "language": options.source_language,
+        "task": options.task.value,
+        "word_timestamps": options.word_timestamps,
+        "vad_filter": options.vad_mode is not VadMode.DISABLED,
+    }
+    if options.vad_mode is VadMode.CUSTOM and options.vad_parameters is not None:
+        arguments["vad_parameters"] = options.vad_parameters.runtime_options()
+    if options.intervals:
+        arguments["clip_timestamps"] = [
+            value
+            for interval in options.intervals
+            for value in (interval.start_seconds, interval.end_seconds)
+        ]
+
+    for name in ("initial_prompt", "prefix", "hotwords"):
+        value = getattr(options.prompt, name)
+        if value is not None:
+            arguments[name] = value
+
+    decoding_mapping = {
+        "beam_size": "beam_size",
+        "best_of": "best_of",
+        "patience": "patience",
+        "length_penalty": "length_penalty",
+        "repetition_penalty": "repetition_penalty",
+        "no_repeat_ngram_size": "no_repeat_ngram_size",
+        "temperatures": "temperature",
+        "compression_ratio_threshold": "compression_ratio_threshold",
+        "log_probability_threshold": "log_prob_threshold",
+        "no_speech_threshold": "no_speech_threshold",
+        "condition_on_previous_text": "condition_on_previous_text",
+        "prompt_reset_temperature": "prompt_reset_on_temperature",
+        "suppress_blank": "suppress_blank",
+        "suppress_tokens": "suppress_tokens",
+        "max_new_tokens": "max_new_tokens",
+        "hallucination_silence_seconds": "hallucination_silence_threshold",
+        "prepend_punctuations": "prepend_punctuations",
+        "append_punctuations": "append_punctuations",
+        "language_detection_threshold": "language_detection_threshold",
+        "language_detection_segments": "language_detection_segments",
+    }
+    for contract_name, runtime_name in decoding_mapping.items():
+        value = getattr(options.decoding, contract_name)
+        if value is not None:
+            arguments[runtime_name] = list(value) if isinstance(value, tuple) else value
+    return arguments
+
+
+def _applied_options(info: Any, requested: TranscriptionOptions) -> TranscriptionOptions:
+    backend_options = getattr(info, "transcription_options", None)
+    if backend_options is None:
+        return requested.model_copy(
+            update={"source_language": str(getattr(info, "language", "")) or None}
+        )
+
+    def option(name: str, fallback: Any = None) -> Any:
+        return getattr(backend_options, name, fallback)
+
+    applied = {
+        "source_language": str(getattr(info, "language", "")) or None,
+        "task": option("task", requested.task.value),
+        "word_timestamps": bool(option("word_timestamps", requested.word_timestamps)),
+        "vad_mode": requested.vad_mode,
+        "vad_parameters": requested.vad_parameters,
+        "intervals": requested.intervals,
+        "prompt": {
+            "initial_prompt": option("initial_prompt"),
+            "prefix": option("prefix"),
+            "hotwords": option("hotwords"),
+        },
+        "decoding": {
+            "beam_size": option("beam_size"),
+            "best_of": option("best_of"),
+            "patience": option("patience"),
+            "length_penalty": option("length_penalty"),
+            "repetition_penalty": option("repetition_penalty"),
+            "no_repeat_ngram_size": option("no_repeat_ngram_size"),
+            "temperatures": option("temperatures"),
+            "compression_ratio_threshold": option("compression_ratio_threshold"),
+            "log_probability_threshold": option("log_prob_threshold"),
+            "no_speech_threshold": option("no_speech_threshold"),
+            "condition_on_previous_text": option("condition_on_previous_text"),
+            "prompt_reset_temperature": option("prompt_reset_on_temperature"),
+            "suppress_blank": option("suppress_blank"),
+            "suppress_tokens": option("suppress_tokens"),
+            "max_new_tokens": option("max_new_tokens"),
+            "hallucination_silence_seconds": option("hallucination_silence_threshold"),
+            "prepend_punctuations": option("prepend_punctuations"),
+            "append_punctuations": option("append_punctuations"),
+            "language_detection_threshold": option("language_detection_threshold"),
+            "language_detection_segments": option("language_detection_segments"),
+        },
+    }
+    return TranscriptionOptions.model_validate(applied)
+
+
+def _optional_float(value: Any, attribute: str) -> float | None:
+    raw = getattr(value, attribute, None)
+    return float(raw) if raw is not None else None
+
+
 def _result_payload(
     operation_id: str,
     model: ModelId,
@@ -591,15 +808,32 @@ def _result_payload(
     started: float,
     segments: list[dict[str, Any]],
     cancelled: bool,
+    requested_options: TranscriptionOptions,
+    device: str,
+    compute_type: str,
 ) -> dict[str, Any]:
+    source_language = str(info.language)
+    task = requested_options.task
+    probabilities = tuple(
+        {"code": str(code), "probability": float(probability)}
+        for code, probability in (getattr(info, "all_language_probs", None) or ())
+    )
     return {
         "operation_id": operation_id,
         "model": model.model_dump(mode="json"),
         "source_path": str(source_path),
-        "language": str(info.language),
-        "language_probability": float(info.language_probability),
+        "source_language": source_language,
+        "source_language_probability": float(info.language_probability),
+        "output_language": "en" if task is TranscriptionTask.TRANSLATE else source_language,
+        "task": task.value,
+        "language_probabilities": probabilities,
         "duration_seconds": float(info.duration),
+        "duration_after_vad_seconds": _optional_float(info, "duration_after_vad"),
         "elapsed_seconds": time.perf_counter() - started,
+        "device": "gpu" if device == "cuda" else "cpu",
+        "compute_type": compute_type,
+        "requested_options": requested_options.model_dump(mode="json"),
+        "applied_options": _applied_options(info, requested_options).model_dump(mode="json"),
         "segments": segments,
         "cancelled": cancelled,
     }

@@ -24,6 +24,19 @@ AIOpenStudio será una aplicación de escritorio en Python para descubrir, ejecu
 
 Ollama es un backend, no una suite. Esta distinción permite incorporar otros runners de LLM en el futuro sin rediseñar la interfaz.
 
+## Guías de uso y modelos
+
+| Área | Guía práctica | Capacidades, modelos y validación |
+|---|---|---|
+| LLM/Ollama | [Guía LLM](docs/llm-user-guide.md) | [Matriz LLM](docs/llm-validation.md) |
+| Fooocus | [Guía Fooocus](docs/fooocus-user-guide.md) | [Capacidades avanzadas](docs/fooocus-advanced-capabilities.md) |
+| Whisper | [Guía Whisper](docs/whisper-user-guide.md) | [Idiomas](docs/whisper-language-support.md) y [validación](docs/whisper-validation.md) |
+| Catálogo común | [Biblioteca de modelos](docs/shared-model-library.md) | [Descripción y comparación de herramientas](docs/tooling-catalog.md) |
+
+La instalación de la aplicación y la descarga de modelos son acciones separadas. Instalar extras de
+Python aporta clientes como faster-whisper o gradio-client, pero no instala Ollama/Fooocus ni
+descarga pesos. La UI tampoco descarga modelos.
+
 ## Arquitectura propuesta
 
 ```text
@@ -217,6 +230,25 @@ python scripts/model_library.py list
 python scripts/model_library.py download llm.phi4-mini-3.8b-q4
 ```
 
+Ejemplos por suite:
+
+```powershell
+# LLM administrado por el runtime Ollama ya instalado
+python scripts/model_library.py download llm.gemma3-4b-q4
+
+# Whisper local
+python scripts/model_library.py download speech.faster-whisper-small
+python scripts/model_library.py download speech.faster-whisper-medium
+
+# Checkpoint y activos base Fooocus; revisar cada licencia antes
+python scripts/model_library.py download image.fooocus-juggernaut-xl-v8
+python scripts/model_library.py download image.fooocus-xl-vae-approx image.fooocus-sd15-vae-approx image.fooocus-xl-to-v1-interposer image.fooocus-prompt-expansion
+```
+
+Cada comando muestra origen, licencia y tamaño conocido y exige escribir la confirmación indicada.
+No es necesario instalar todas las variantes. `list` es la fuente de identificadores aceptados; no
+inventes nombres ni copies pesos manualmente entre carpetas administradas.
+
 El script no instala Ollama ni dependencias, no descarga al importar y solicita confirmación de
 fuentes/licencias. La estructura, portabilidad y todos los comandos están documentados en
 [docs/shared-model-library.md](docs/shared-model-library.md).
@@ -383,10 +415,15 @@ su memoria por conversación. Los límites predeterminados son 2 MiB por texto, 
 `AIOPENSTUDIO_LLM_*`. El tab permite agregar, previsualizar, reordenar, habilitar y recordar la cola,
 además de editar samplers, thinking, presupuesto, resúmenes y salida JSON/JSON Schema.
 
-El tab Whisper abre audio local o graba desde el micrófono, distingue el modelo seleccionado del
-modelo realmente residente, cambia de modelo sin exigir una liberación manual, muestra progreso y
-segmentos, cancela y exporta TXT, JSON, SRT o VTT. Sus runs seguros y reales están en
-[docs/whisper-validation.md](docs/whisper-validation.md).
+El tab Whisper abre o encola varios audios, graba desde el micrófono, procesa secuencialmente y
+distingue el modelo seleccionado del realmente residente. La vista predeterminada conserva texto
+limpio; el detalle opcional muestra segmentos, palabras, timestamps y confianza. Admite correcciones
+no destructivas, búsqueda, intervalos, VAD, contexto lingüístico y decodificación avanzada, y
+exporta TXT, JSON reproducible, SRT, VTT, CSV o TSV. Sus runs seguros y reales están en
+[docs/whisper-validation.md](docs/whisper-validation.md); la semántica de entrada y traducción está
+en [docs/whisper-language-support.md](docs/whisper-language-support.md). Parámetros, recetas,
+exportaciones y dictado experimental se explican en la
+[guía de uso de Whisper](docs/whisper-user-guide.md).
 
 El tab Fooocus ofrece texto-a-imagen, variaciones, upscale, inpaint/outpaint, referencias
 `Image Prompt`/`PyraCanny`/`CPDS`/`FaceSwap`, Describe y Enhance según las capacidades del esquema

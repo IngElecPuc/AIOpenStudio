@@ -26,6 +26,9 @@ o una GPU compatible no están disponibles.
   El tab Whisper independiente no desplaza automáticamente otros modelos.
 - Capturar micrófono mediante la dependencia opcional `sounddevice`, guardar WAV temporal y
   eliminarlo tras la transcripción.
+- Mantener el dictado normal como grabación completa seguida de transcripción. La vista experimental
+  inspecciona duración con PyAV, procesa clips solapados en secuencia y deduplica texto en el
+  servicio; no usa batch, no se presenta como streaming nativo y no persiste su texto por defecto.
 
 ## Consecuencias
 
@@ -35,3 +38,5 @@ o una GPU compatible no están disponibles.
 - CPU usa `int8`; GPU intenta `int8_float16`. La RTX 5060 sólo se declara compatible después del
   preflight y smoke test reales de CTranslate2.
 - La ausencia de dependencias opcionales degrada el control correspondiente sin bloquear el arranque.
+- La deduplicación experimental es heurística y debe compararse con una transcripción completa antes
+  de usar su texto como resultado final.

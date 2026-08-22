@@ -16,11 +16,16 @@ from uuid import uuid4
 
 from aiopenstudio.core.config import AppSettings
 from aiopenstudio.core.contracts import (
+    AudioInterval,
     ComputeDevice,
     LoadPolicy,
     TranscriptionEventKind,
+    TranscriptionOptions,
+    TranscriptionPromptOptions,
     TranscriptionRequest,
     TranscriptionResult,
+    TranscriptionTask,
+    VadMode,
 )
 from aiopenstudio.infrastructure.runtimes.whisper import FasterWhisperRuntime
 
@@ -29,10 +34,36 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("scenario", choices=("preflight", "cpu", "gpu", "cancel"))
+    parser.add_argument(
+        "scenario",
+        choices=(
+            "preflight",
+            "cpu",
+            "gpu",
+            "cancel",
+            "translate",
+            "word-timestamps",
+            "vad",
+            "hotwords",
+            "intervals",
+        ),
+    )
     parser.add_argument("--source", type=Path)
     parser.add_argument("--model", default="small")
     parser.add_argument("--language", default="es")
+    parser.add_argument("--hotwords", default="AIOpenStudio")
+    parser.add_argument(
+        "--interval",
+        action="append",
+        default=[],
+        metavar="START-END",
+        help="Intervalo en segundos; repetible y obligatorio para el escenario intervals.",
+    )
+    parser.add_argument(
+        "--device",
+        choices=tuple(device.value for device in ComputeDevice),
+        default=ComputeDevice.CPU.value,
+    )
     parser.add_argument("--cancel-after", type=float, default=2.0)
     parser.add_argument("--timeout", type=float, default=900.0)
     parser.add_argument(
@@ -78,6 +109,66 @@ async def preflight(runtime: FasterWhisperRuntime) -> int:
     return 0 if models and packages["faster-whisper"] else 1
 
 
+def _scenario_device(args: argparse.Namespace) -> ComputeDevice:
+    if args.scenario == "cpu":
+        return ComputeDevice.CPU
+    if args.scenario in {"gpu", "cancel"}:
+        return ComputeDevice.GPU
+    return ComputeDevice(args.device)
+
+
+def _parse_interval(value: str) -> AudioInterval:
+    limits = value.split("-", maxsplit=1)
+    if len(limits) != 2:
+        raise ValueError("Cada --interval debe usar START-END en segundos.")
+    return AudioInterval(
+        start_seconds=float(limits[0]),
+        end_seconds=float(limits[1]),
+    )
+
+
+def _scenario_options(args: argparse.Namespace) -> TranscriptionOptions:
+    scenario = str(args.scenario)
+    intervals = tuple(_parse_interval(value) for value in args.interval)
+    if scenario == "intervals" and not intervals:
+        raise ValueError("El escenario intervals requiere al menos un --interval START-END.")
+    if scenario != "intervals" and intervals:
+        raise ValueError("--interval sólo se usa con el escenario intervals.")
+    return TranscriptionOptions(
+        source_language=args.language or None,
+        task=(
+            TranscriptionTask.TRANSLATE
+            if scenario == "translate"
+            else TranscriptionTask.TRANSCRIBE
+        ),
+        word_timestamps=scenario == "word-timestamps",
+        vad_mode=VadMode.DISABLED if intervals else VadMode.AUTOMATIC,
+        intervals=intervals,
+        prompt=TranscriptionPromptOptions(
+            hotwords=args.hotwords if scenario == "hotwords" else None
+        ),
+    )
+
+
+def _scenario_passed(
+    scenario: str,
+    terminal: str | None,
+    result: TranscriptionResult | None,
+    word_count: int,
+) -> bool:
+    if scenario == "cancel":
+        return terminal == TranscriptionEventKind.CANCELLED.value
+    if terminal != TranscriptionEventKind.COMPLETED.value or result is None:
+        return False
+    if scenario == "translate":
+        return result.output_language == "en"
+    if scenario == "word-timestamps":
+        return word_count > 0
+    if scenario == "vad":
+        return result.duration_after_vad_seconds is not None
+    return True
+
+
 async def run_scenario(runtime: FasterWhisperRuntime, args: argparse.Namespace) -> int:
     if args.source is None or not args.source.is_file():
         raise ValueError("Los escenarios reales requieren --source con un audio local existente.")
@@ -85,16 +176,19 @@ async def run_scenario(runtime: FasterWhisperRuntime, args: argparse.Namespace) 
     descriptor = next((item for item in models if item.id.variant == args.model), None)
     if descriptor is None:
         raise ValueError(f"El modelo local {args.model!r} no está disponible.")
-    device = ComputeDevice.CPU if args.scenario == "cpu" else ComputeDevice.GPU
+    if args.scenario == "translate" and "translation-to-english" not in descriptor.capabilities:
+        raise ValueError("El modelo seleccionado no declara traducción nativa a inglés.")
+    device = _scenario_device(args)
     run_id = str(uuid4())
+    options = _scenario_options(args)
     request = TranscriptionRequest(
         operation_id=run_id,
         model=descriptor.id,
         source_path=args.source,
-        options={"language": args.language},
+        options=options,
     )
     report: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "run_id": run_id,
         "scenario": args.scenario,
         "status": "failed",
@@ -111,21 +205,24 @@ async def run_scenario(runtime: FasterWhisperRuntime, args: argparse.Namespace) 
             "bytes": args.source.stat().st_size,
             "sha256": file_sha256(args.source),
         },
+        "requested_options": options.model_dump(mode="json"),
     }
     started = time.perf_counter()
     segment_count = 0
     character_count = 0
+    word_count = 0
     terminal: str | None = None
     result: TranscriptionResult | None = None
     try:
         await runtime.load(descriptor.id, LoadPolicy(device=device))
 
         async def consume() -> None:
-            nonlocal segment_count, character_count, terminal, result
+            nonlocal segment_count, character_count, word_count, terminal, result
             async for event in runtime.transcribe(request):
                 if event.kind is TranscriptionEventKind.SEGMENT and event.segment is not None:
                     segment_count += 1
                     character_count += len(event.segment.text)
+                    word_count += len(event.segment.words)
                 if event.kind in {
                     TranscriptionEventKind.COMPLETED,
                     TranscriptionEventKind.CANCELLED,
@@ -139,8 +236,9 @@ async def run_scenario(runtime: FasterWhisperRuntime, args: argparse.Namespace) 
             await asyncio.sleep(args.cancel_after)
             await runtime.cancel(run_id)
         await task
-        expected = "cancelled" if args.scenario == "cancel" else "completed"
-        report["status"] = "passed" if terminal == expected else "failed"
+        report["status"] = (
+            "passed" if _scenario_passed(args.scenario, terminal, result, word_count) else "failed"
+        )
     except Exception as error:
         report["error"] = {"type": type(error).__name__, "message": str(error)}
     finally:
@@ -155,6 +253,7 @@ async def run_scenario(runtime: FasterWhisperRuntime, args: argparse.Namespace) 
             "terminal_event": terminal,
             "segments": segment_count,
             "characters": character_count,
+            "words": word_count,
             "audio_duration_seconds": result.duration_seconds if result else None,
             "backend_elapsed_seconds": result.elapsed_seconds if result else None,
             "realtime_factor": (
@@ -162,8 +261,22 @@ async def run_scenario(runtime: FasterWhisperRuntime, args: argparse.Namespace) 
                 if result and result.duration_seconds
                 else None
             ),
-            "detected_language": result.language if result else None,
-            "language_probability": result.language_probability if result else None,
+            "source_language": result.source_language if result else None,
+            "source_language_probability": (
+                result.source_language_probability if result else None
+            ),
+            "output_language": result.output_language if result else None,
+            "duration_after_vad_seconds": (
+                result.duration_after_vad_seconds if result else None
+            ),
+            "vad_removed_seconds": result.vad_removed_seconds if result else None,
+            "device": result.device.value if result and result.device else None,
+            "compute_type": result.compute_type if result else None,
+            "applied_options": (
+                result.applied_options.model_dump(mode="json")
+                if result and result.applied_options
+                else None
+            ),
             "content_included": False,
         }
         args.report_dir.mkdir(parents=True, exist_ok=True)

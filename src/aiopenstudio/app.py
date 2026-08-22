@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from aiopenstudio import __version__
 from aiopenstudio.core.config import AppSettings
-from aiopenstudio.infrastructure.audio import SoundDeviceAudioRecorder
+from aiopenstudio.infrastructure.audio import PyAVAudioInspector, SoundDeviceAudioRecorder
 from aiopenstudio.infrastructure.database import (
     KeyringCredentialStore,
     PostgresMigrationManager,
@@ -181,6 +181,7 @@ def main() -> None:
         residency_policy=monitor_service,
         resource_monitor=monitor_service,
         recorder=audio_recorder,
+        audio_inspector=PyAVAudioInspector(),
         recordings_dir=resolve_path(settings.data_dir / "runtime/whisper/recordings"),
         max_input_bytes=settings.whisper_max_input_bytes,
         execution_history=persistence_service,
